@@ -17,7 +17,7 @@ import {
   transitionLen,
   type Layer,
 } from "./timeline.ts";
-import { ASPECTS, type Aspect, type Clip, type LookId, type Project, type Song } from "./types.ts";
+import { ASPECTS, bandRect, type Aspect, type Clip, type LookId, type Project, type Song } from "./types.ts";
 
 class Player {
   readonly el: HTMLVideoElement;
@@ -499,18 +499,14 @@ export class Engine {
     const apply = (kind: string, d: number, len: number, side: "in" | "out") => {
       if (len <= 0) return;
       const h = len / 2;
-      if (kind === "zoom") {
-        if (side === "in" && d >= 0 && d < len) out.kick += 0.32 * Math.pow(1 - d / len, 2.2);
-        if (side === "out" && d < 0 && d > -h) out.kick += 0.1 * Math.pow(1 + d / h, 2);
-        return;
-      }
       if (Math.abs(d) > h) return;
       const k = 1 - Math.abs(d) / h;
       if (kind === "flash") out.flash = Math.max(out.flash, 0.9 * k * k);
-      if (kind === "glitch") out.glitch = Math.max(out.glitch, k);
-      if (kind === "whip") {
-        out.blur = Math.max(out.blur, k);
-        out.slide += (side === "out" ? 1 : -1) * 0.22 * k * k;
+      if (kind === "smear") {
+        // Motion-blurred frames either side of the cut, peaking in a white flash.
+        out.blur = Math.max(out.blur, Math.min(1, k * 1.4));
+        out.slide += (side === "out" ? 1 : -1) * 0.12 * k * k;
+        out.flash = Math.max(out.flash, 0.85 * Math.pow(k, 3));
       }
     };
     const start = this.starts[index];
@@ -573,11 +569,18 @@ export class Engine {
     const H = this.canvas.height;
     this.renderer.clear();
     if (!p || !p.segments.length || !this.grade) return;
+    const band = bandRect(p.frame ?? "full", W, H);
+    this.renderer.setBand(...band);
     const layers: Layer[] = layersAt(p.segments, this.starts, t);
     const pulse = this.pulse(t);
+    const wideBand = band[2] > band[3];
     layers.forEach((l, slot) => {
       const src = this.sourceFor(l.index, slot, t);
       if (!src) return;
+      // A wide band keeps only a slice of vertical phone footage. Detail alone
+      // pulls the slice to skies and lights, so lean toward the middle of the
+      // picture, where people usually are.
+      const fy = wideBand && src.h > src.w ? 0.6 * 0.56 + 0.4 * src.focus.y : src.focus.y;
       const eff = this.effects(l.index, t);
       this.renderer.draw(
         slot,
@@ -586,7 +589,7 @@ export class Engine {
           srcW: src.w,
           srcH: src.h,
           focusX: src.seg.reframe ?? src.focus.x,
-          focusY: src.focus.y,
+          focusY: fy,
           zoom: src.seg.zoom,
           kick: 1 + eff.kick + pulse,
           opacity: slot === 0 ? 1 : l.weight,
@@ -601,7 +604,7 @@ export class Engine {
     });
     if (p.texts.some((tx) => t >= tx.start && t <= tx.end && tx.text.trim())) {
       this.textCtx.clearRect(0, 0, W, H);
-      drawTexts(this.textCtx, p.texts, t, W, H);
+      drawTexts(this.textCtx, p.texts, t, W, H, band);
       this.renderer.overlay(this.textCanvas);
     }
   }

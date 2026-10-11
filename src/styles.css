@@ -629,13 +629,9 @@ p {
   font-size: 14px;
   font-weight: 400;
 }
-.font-box {
-  font-family: var(--font-display);
-  font-weight: 800;
-}
-.font-neon {
-  font-family: var(--font-display);
-  text-shadow: 0 0 8px rgba(255, 179, 107, 0.7);
+.font-caption {
+  font-family: "Tinos", "Times New Roman", Times, serif;
+  font-weight: 400;
 }
 .font-hand {
   font-family: "Caveat", cursive;
@@ -1571,20 +1567,14 @@ textarea {
   margin-bottom: 5px;
 }
 
-.sw-clean {
-  background: linear-gradient(90deg, #e9f2ff, #7fb6ff, #ffd36b);
+.sw-cinema {
+  background: linear-gradient(90deg, #0f2e33, #3d6b6a 45%, #e3a35a);
 }
-.sw-hype {
-  background: linear-gradient(90deg, #ff3f8e, #ffd23f, #3fd1ff);
+.sw-roadtrip {
+  background: linear-gradient(90deg, #6e5a52, #d9b38c 55%, #f4e2c8);
 }
-.sw-cinematic {
-  background: linear-gradient(90deg, #0c5c69, #4b8a8c, #ff9a52);
-}
-.sw-vintage {
-  background: linear-gradient(90deg, #6d5848, #d8a46a, #f3dcb4);
-}
-.sw-moody {
-  background: linear-gradient(90deg, #1b2733, #3b4c58, #a2a6a8);
+.sw-summer {
+  background: linear-gradient(90deg, #0d6e9c, #5fc1e0 50%, #ffd28a);
 }
 
 .status-line {
@@ -1674,7 +1664,7 @@ textarea {
 
 .looks {
   display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
+  grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 8px;
 }
 
@@ -1949,7 +1939,7 @@ textarea {
     margin: 0 auto;
   }
   .looks {
-    grid-template-columns: repeat(4, minmax(0, 1fr));
+    grid-template-columns: repeat(3, minmax(0, 1fr));
   }
   .beatcount {
     display: none;

@@ -72,7 +72,7 @@ const initial: State = {
     musicBusy: null,
     toast: null,
     exportOpen: false,
-    auto: { style: "hype", pace: "balanced", length: "auto", order: "story", hook: true, useAI: true },
+    auto: { style: "cinema", pace: "beat", length: "auto", order: "story", hook: true, useAI: true },
     ai: { available: false, images: false, checked: false },
     directorNote: null,
     demo: false,

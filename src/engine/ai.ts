@@ -4,6 +4,7 @@
 
 import type { DirectorPlan } from "./autoedit.ts";
 import type { SampleFn } from "./platform.ts";
+import { STYLES } from "./looks.ts";
 import type { Clip, Moment, StyleId } from "./types.ts";
 
 const TILE = 256;
@@ -66,11 +67,9 @@ export async function contactSheet(moments: Moment[]): Promise<Blob> {
 }
 
 const STYLE_WORDS: Record<StyleId, string> = {
-  clean: "clean and bright",
-  hype: "high-energy and punchy",
-  cinematic: "cinematic and slow",
-  vintage: "warm, nostalgic film",
-  moody: "moody and atmospheric",
+  cinema: "cinematic travel montage: widescreen film frame, moody teal and gold grade, a hard cut on every beat",
+  roadtrip: "nostalgic road-trip-with-friends home video: faded warm film, relaxed cuts, a small POV caption above the picture",
+  summer: "summer holiday montage: clean sunny colour, a hard cut on every beat",
 };
 
 interface DirectorReply {
@@ -98,29 +97,33 @@ export async function runDirector(
     })
     .join("\n");
   const want = Math.min(shotsNeeded, cands.length);
-  const prompt = `You are editing a short Instagram Reel from someone's personal lifestyle footage.
+  const caption = STYLES[info.style].caption;
+  const prompt = `You are editing an Instagram Reel from someone's own footage of their life: trips, friends, nights out, golden hours.
+
+The style is a ${STYLE_WORDS[info.style]}. Think of reels captioned "Beautiful ain't it" or "missing this...": no talking to camera, no on-screen effects, just a stream of beautiful real moments cut to the music, one shot per beat, every shot a different place or moment.
 
 The image is a contact sheet of ${cands.length} candidate shots, numbered 1-${cands.length} in reading order (left to right, top to bottom). Each tile is one moment from their clips.
 
 Shot notes (number: clip file, on-device quality score 0-100, motion):
 ${notes}
 
-The reel is ${Math.round(info.length)} seconds long, cut to music${info.bpm ? ` at ${Math.round(info.bpm)} BPM` : ""}, with a ${STYLE_WORDS[info.style]} feel. It has ${shotsNeeded} shot slots.
+The reel is ${Math.round(info.length)} seconds long, cut to music${info.bpm ? ` at ${Math.round(info.bpm)} BPM` : ""}, with ${shotsNeeded} shot slots.
 
 Pick ${want} shots and put them in playing order:
-- Open with the most eye-catching shot, the hook that stops someone scrolling.
-- Build a small story or vibe progression; put the most energetic shots in the second half, where the music peaks.
-- End on a satisfying or calm shot.
-- Leave out blurry, dark, accidental (pocket, floor, lens cap) or near-duplicate shots.
+- Favour atmosphere: wide landscapes and water, golden hour and sunsets, silhouettes, people seen from behind or lost in the moment, friends laughing, night lights, movement through a place (car windows, boats, trains, roads).
+- Open with the most beautiful, cinematic shot.
+- Keep it varied: never two near-identical shots, and spread out shots from the same place.
+- Put the most alive, energetic moments in the second half, where the music lifts; end on a calm or wistful shot (a sunset, someone walking away, a view).
+- Leave out blurry, badly exposed, accidental (pocket, floor, lens cap) or posed-to-camera shots.
 
 Also write:
-- "title": short on-screen text for the opening, at most 5 words, no hashtags or emoji. Use "" if the footage speaks for itself.
-- "caption": an Instagram caption, 1-2 short casual sentences in first person, at most one emoji.
-- "hashtags": 5-8 relevant hashtags.
+- "title": ${caption ? 'a one-line "POV: ..." caption that sits above the picture, lowercase after "POV:", at most 9 words, no emoji, in the voice of "POV: you go on a summer roadtrip with your friends".' : '"" (this style has no on-screen text).'}
+- "caption": the Instagram caption: short and understated, like "Beautiful ain't it..." or "missing this...", at most one emoji.
+- "hashtags": 3-6 relevant hashtags.
 - a 2-5 word "label" describing each chosen shot.
 
 Reply with only JSON, like:
-{"shots":[{"n":3,"label":"sunset over the bay"},{"n":7,"label":"jumping off the dock"}],"title":"Summer, slowly","caption":"Golden hours with my favourite people ☀️","hashtags":["#summer","#goldenhour"]}`;
+{"shots":[{"n":3,"label":"sunset over the bay"},{"n":7,"label":"friends on the boat"}],"title":${caption ? '"POV: you go on a summer roadtrip with your friends"' : '""'},"caption":"missing this...","hashtags":["#summer","#travel"]}`;
 
   const reply = (await claude.json(prompt, { images: [sheet], signal })) as DirectorReply;
   const order: string[] = [];
@@ -154,9 +157,9 @@ export async function writeCaption(
   current: string,
   signal: AbortSignal,
 ): Promise<{ caption: string; hashtags: string[] }> {
-  const prompt = `Write a fresh Instagram Reel caption for a ${STYLE_WORDS[style]} lifestyle reel.
-Shots in the reel: ${labels.length ? labels.join("; ") : "everyday moments"}.
-${current ? `Current caption (write a different one): ${current}\n` : ""}Keep it 1-2 short casual sentences in first person, at most one emoji, then 5-8 relevant hashtags.
+  const prompt = `Write a fresh Instagram caption for a ${STYLE_WORDS[style]}.
+Shots in the reel: ${labels.length ? labels.join("; ") : "travel and time with friends"}.
+${current ? `Current caption (write a different one): ${current}\n` : ""}Keep it short and understated, like "Beautiful ain't it..." or "missing this...": a few words, lowercase is fine, at most one emoji. Then 3-6 relevant hashtags.
 Reply with only JSON: {"caption":"...","hashtags":["#..."]}`;
   const r = (await claude.json(prompt, { modelTier: "quick", signal, cache: false })) as { caption?: string; hashtags?: string[] };
   return {
@@ -166,25 +169,17 @@ Reply with only JSON: {"caption":"...","hashtags":["#..."]}`;
 }
 
 const FALLBACK: Record<StyleId, { caption: string[]; tags: string[] }> = {
-  clean: {
-    caption: ["Little moments, big days.", "Saving this one for the memories.", "A good week in 15 seconds."],
-    tags: ["#reels", "#dailyvlog", "#lifestyle", "#goodvibes", "#weekend", "#memories"],
+  cinema: {
+    caption: ["Beautiful ain't it...", "Somewhere I'd go back to.", "Frames from a good year."],
+    tags: ["#cinematic", "#travel", "#reels", "#goldenhour", "#wanderlust"],
   },
-  hype: {
-    caption: ["Turn the volume up for this one 🔊", "No skips, only highlights.", "Main character energy."],
-    tags: ["#reels", "#hype", "#lifestyle", "#weekendvibes", "#letsgo", "#explore"],
+  roadtrip: {
+    caption: ["missing this...", "best people, best days", "take me back"],
+    tags: ["#roadtrip", "#summer", "#friends", "#memories", "#reels"],
   },
-  cinematic: {
-    caption: ["Slowing it all down for a second.", "Some days feel like a film.", "Frames from a good day."],
-    tags: ["#cinematic", "#reels", "#filmmaking", "#goldenhour", "#visualsoflife", "#moodygrams"],
-  },
-  vintage: {
-    caption: ["Feels like an old home video already.", "Warm days, softer memories.", "Shot on feelings."],
-    tags: ["#filmlook", "#vintagevibes", "#reels", "#memories", "#nostalgia", "#lifestyle"],
-  },
-  moody: {
-    caption: ["Quiet hours.", "Somewhere between the lights.", "Late nights, slow thoughts."],
-    tags: ["#moody", "#reels", "#nightvibes", "#citylights", "#aesthetic", "#visualsoflife"],
+  summer: {
+    caption: ["missing this...", "summer, on repeat", "salt, sun, no plans"],
+    tags: ["#summer", "#holiday", "#sea", "#travel", "#reels"],
   },
 };
 

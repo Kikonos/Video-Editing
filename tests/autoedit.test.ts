@@ -2,7 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { autoEdit, planSlots, selectMoments } from "../src/engine/autoedit.ts";
 import { pickMoments, scoreSamples, type RawSample } from "../src/engine/metrics.ts";
-import { emptyProject, type Clip, type Song } from "../src/engine/types.ts";
+import { bandRect, emptyProject, type Clip, type Song } from "../src/engine/types.ts";
 
 function fakeClip(id: string, duration: number, peakAt: number, createdAt: number): Clip {
   const raw: RawSample[] = [];
@@ -31,8 +31,8 @@ test("moments land on the clip's peak", () => {
 test("every cut sits on a beat and the reel matches the requested length", () => {
   const s = song(120, 60);
   const clips = [fakeClip("a", 20, 5, 1), fakeClip("b", 15, 9, 2), fakeClip("c", 30, 20, 3)];
-  const p = autoEdit(clips, s, emptyProject(), { style: "clean", pace: "balanced", length: 15, order: "story", hook: true, songStart: s.downbeats[2] });
-  assert.ok(p.segments.length >= 6, `${p.segments.length} shots`);
+  const p = autoEdit(clips, s, emptyProject(), { style: "cinema", pace: "beat", length: 15, order: "story", hook: true, songStart: s.downbeats[2] });
+  assert.ok(p.segments.length >= 20, `${p.segments.length} shots`);
   let t = p.songStart;
   for (const seg of p.segments) {
     t += seg.duration;
@@ -45,11 +45,11 @@ test("every cut sits on a beat and the reel matches the requested length", () =>
   assert.ok(Math.abs(total - 15) <= 1.01, `total ${total}`);
 });
 
-test("hype pace cuts faster than chill", () => {
+test("every-beat pace cuts faster than the relaxed pace", () => {
   const s = song(120, 60);
-  const fast = planSlots(s, 0.2, 15, "hype").length;
-  const slow = planSlots(s, 0.2, 15, "chill").length;
-  assert.ok(fast > slow * 2, `${fast} vs ${slow}`);
+  const fast = planSlots(s, 0.2, 15, "beat").length;
+  const slow = planSlots(s, 0.2, 15, "story").length;
+  assert.ok(fast > slow * 1.8, `${fast} vs ${slow}`);
 });
 
 test("selection spreads across clips", () => {
@@ -62,7 +62,56 @@ test("selection spreads across clips", () => {
 
 test("works without music on a 120 BPM grid", () => {
   const clips = [fakeClip("a", 10, 5, 1)];
-  const p = autoEdit(clips, null, emptyProject(), { style: "hype", pace: "hype", length: 7, order: "energy", hook: true, songStart: 0 });
+  const p = autoEdit(clips, null, emptyProject(), { style: "cinema", pace: "beat", length: 7, order: "energy", hook: true, songStart: 0 });
   assert.ok(p.segments.length > 3);
   for (const seg of p.segments) assert.ok(Math.abs(seg.duration / 0.5 - Math.round(seg.duration / 0.5)) < 1e-6);
+});
+
+test("every-beat montage: one beat per shot, holding the opening, the drop and the end", () => {
+  const s = song(115, 60); // energy jumps half way through: that bar is the drop
+  const start = s.downbeats.find((d) => d > 22)!;
+  const slots = planSlots(s, start, 15, "beat");
+  const beats = slots.map((x) => x.beats);
+  assert.equal(beats[0], 2, "opening shot holds two beats");
+  assert.ok(beats[beats.length - 1] >= 2, "last shot holds");
+  const single = beats.filter((b) => b === 1).length;
+  assert.ok(single / beats.length > 0.75, `${single}/${beats.length} single-beat shots`);
+  const drop = slots.find((x) => x.drop);
+  assert.ok(drop, "found the drop");
+  assert.equal(drop!.beats, 2, "the drop shot holds two beats");
+});
+
+test("cinema style: blur-flash into the drop, punch-ins continue the same take", () => {
+  const s = song(115, 60);
+  const clips = [fakeClip("a", 40, 5, 1), fakeClip("b", 40, 9, 2), fakeClip("c", 40, 20, 3)];
+  const p = autoEdit(clips, s, emptyProject(), { style: "cinema", pace: "beat", length: 15, order: "story", hook: true, songStart: s.downbeats.find((d) => d > 22)! });
+  assert.equal(p.frame, "16:9");
+  assert.equal(p.texts.length, 0, "no on-screen text in the cinema style");
+  assert.equal(p.segments.filter((x) => x.transition === "smear").length, 1, "exactly one blur flash");
+  assert.ok(p.segments.every((x) => x.transition === "cut" || x.transition === "smear"), "everything else is a hard cut");
+  const punch = p.segments.findIndex((x) => x.zoom > 1);
+  assert.ok(punch > 0, "has a punch-in");
+  const a = p.segments[punch - 1];
+  const b = p.segments[punch];
+  assert.equal(b.clipId, a.clipId);
+  assert.ok(Math.abs(b.srcIn - (a.srcIn + a.duration * a.speed)) < 1e-6, "punch-in picks up where the take left off");
+});
+
+test("road trip style: 4:3 frame, relaxed cuts and a POV caption above the picture", () => {
+  const s = song(123, 60);
+  const clips = [fakeClip("a", 40, 5, 1), fakeClip("b", 40, 9, 2)];
+  const p = autoEdit(clips, s, emptyProject(), { style: "roadtrip", pace: "story", length: 15, order: "story", hook: true, songStart: s.downbeats[2] });
+  assert.equal(p.frame, "4:3");
+  const cap = p.texts.find((t) => t.place === "above");
+  assert.ok(cap && cap.text.startsWith("POV:"), "has a POV caption");
+  const total = p.segments.reduce((x, y) => x + y.duration, 0);
+  assert.ok(cap!.start === 0 && Math.abs(cap!.end - total) < 1e-6, "caption stays for the whole reel");
+  const mean = total / p.segments.length;
+  assert.ok(mean > 0.8, `mean shot ${mean.toFixed(2)}s`);
+});
+
+test("film frame band sits slightly above centre in the 9:16 Reel", () => {
+  assert.deepEqual(bandRect("16:9", 1080, 1920), [0, 560, 1080, 608]);
+  assert.deepEqual(bandRect("4:3", 1080, 1920), [0, 459, 1080, 810]);
+  assert.deepEqual(bandRect("full", 1080, 1920), [0, 0, 1080, 1920]);
 });

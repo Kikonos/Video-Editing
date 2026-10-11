@@ -6,19 +6,15 @@ import type { Segment, Song, TransitionKind } from "./types.ts";
 export const TRANSITION_LEN: Record<TransitionKind, number> = {
   cut: 0,
   fade: 0.5,
-  flash: 0.32,
-  zoom: 0.38,
-  whip: 0.34,
-  glitch: 0.3,
+  flash: 0.26,
+  smear: 0.3,
 };
 
 export const TRANSITION_LABEL: Record<TransitionKind, string> = {
   cut: "Cut",
   fade: "Dissolve",
   flash: "Flash",
-  zoom: "Punch",
-  whip: "Whip",
-  glitch: "Glitch",
+  smear: "Blur flash",
 };
 
 export function segmentStarts(segs: Segment[]): number[] {

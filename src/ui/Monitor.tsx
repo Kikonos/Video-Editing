@@ -1,8 +1,8 @@
 import { useEffect, useRef, useState, useSyncExternalStore } from "react";
-import { engine, primeAudio, selectSeg, setAspect, updateSeg } from "../actions.ts";
+import { engine, primeAudio, selectSeg, setProject, updateSeg } from "../actions.ts";
 import { cropRect } from "../engine/renderer.ts";
 import { formatTime, segmentStarts, timelineBeats, timelineDownbeats } from "../engine/timeline.ts";
-import { ASPECTS, type Aspect } from "../engine/types.ts";
+import { ASPECTS, bandRect, FRAMES, type Aspect, type FrameId } from "../engine/types.ts";
 import { store, useStore } from "../store.ts";
 import { Segmented } from "./controls.tsx";
 import { Icon } from "./icons.tsx";
@@ -70,7 +70,8 @@ export function Monitor() {
     const clip = s.clips.find((c) => c.id === seg!.clipId);
     if (!clip) return;
     const frame = engine.rawFrame();
-    const [, , cw] = cropRect(frame?.w ?? clip.width, frame?.h ?? clip.height, w, h, 0.5, 0.5, seg.zoom);
+    const [, , bw, bh] = bandRect(p.frame, w, h);
+    const [, , cw] = cropRect(frame?.w ?? clip.width, frame?.h ?? clip.height, bw, bh, 0.5, 0.5, seg.zoom);
     if (cw >= 0.999) return; // Nothing to reframe: the shot already fills the width.
     (e.target as HTMLElement).setPointerCapture(e.pointerId);
     drag.current = { x: e.clientX, start: seg.reframe ?? frame?.fx ?? 0.5, span: cw, id: seg.id };
@@ -145,7 +146,7 @@ function SafeZones({ aspect }: { aspect: Aspect }) {
 function Transport() {
   const t = useEngineTime();
   const playing = useEnginePlaying();
-  const aspect = useStore((s) => s.project.aspect);
+  const frame = useStore((s) => s.project.frame);
   const safe = useStore((s) => s.ui.safeZones);
   const song = useStore((s) => s.songs.find((x) => x.id === s.project.songId) ?? null);
   const songStart = useStore((s) => s.project.songStart);
@@ -208,11 +209,15 @@ function Transport() {
       >
         <Icon name="frame" size={17} />
       </button>
-      <Segmented<Aspect>
-        label="Frame size"
-        value={aspect}
-        onChange={setAspect}
-        options={(Object.keys(ASPECTS) as Aspect[]).map((a) => ({ value: a, label: a, title: `${ASPECTS[a].label} · ${ASPECTS[a].w}×${ASPECTS[a].h}` }))}
+      <Segmented<FrameId>
+        label="Picture frame"
+        value={frame}
+        onChange={(v) => setProject({ frame: v })}
+        options={(Object.keys(FRAMES) as FrameId[]).map((f) => ({
+          value: f,
+          label: f === "full" ? "Full" : f,
+          title: f === "full" ? "Fill the whole vertical screen" : `${FRAMES[f].label} frame inside the 9:16 Reel`,
+        }))}
       />
     </div>
   );

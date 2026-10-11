@@ -3,7 +3,7 @@
 import { aiErrorMessage, fallbackCaption, runDirector, writeCaption } from "./engine/ai.ts";
 import { analyzeClip, demoGrabber, snapshot, videoGrabber, type FrameGrabber } from "./engine/analyze.ts";
 import { analyzeBeats, decodeAudio, encodeWav, loudnessEnvelope, waveformPeaks } from "./engine/audio.ts";
-import { alternativeMoment, autoEdit, autoLength, fitMoment, planSlots, type DirectorPlan } from "./engine/autoedit.ts";
+import { alternativeMoment, autoEdit, autoLength, captionText, fitMoment, planSlots, type DirectorPlan } from "./engine/autoedit.ts";
 import { suggestSection } from "./engine/beats.ts";
 import { DEMO_SCENES, synthDemoSong } from "./engine/demo.ts";
 import { Engine } from "./engine/engine.ts";
@@ -273,7 +273,7 @@ export async function loadDemo() {
     await songPromise;
     store.ui({ busy: null });
     if (!store.get().ui.demo) return;
-    generate({ silentAI: true, history: false, demoTitle: true });
+    generate({ silentAI: true, history: false });
   } catch (e) {
     store.ui({ busy: null });
     toast("The sample reel couldn't load: " + (e as Error).message, "error");
@@ -303,7 +303,7 @@ export async function checkAi() {
 
 let directorAbort: AbortController | null = null;
 
-export async function generate(opts: { silentAI?: boolean; keepPlan?: boolean; history?: boolean; demoTitle?: boolean } = {}) {
+export async function generate(opts: { silentAI?: boolean; keepPlan?: boolean; history?: boolean } = {}) {
   const s = store.get();
   const ready = s.clips.filter((c) => c.status === "ready" && c.analysis?.moments.length);
   if (!ready.length) {
@@ -347,13 +347,6 @@ export async function generate(opts: { silentAI?: boolean; keepPlan?: boolean; h
   if (!next.caption) {
     const fb = fallbackCaption(auto.style);
     next = { ...next, caption: fb.caption, hashtags: fb.hashtags };
-  }
-  if (opts.demoTitle && !next.texts.length) {
-    const end = Math.min(totalDuration(next.segments), 2.2);
-    next = {
-      ...next,
-      texts: [{ id: "auto-title", text: "Weekend, unedited", start: 0, end, style: "bold", anim: "pop", y: 0.42, size: 0.1, color: "#ffffff" }],
-    };
   }
   if (plan) {
     const labels = plan.labels;
@@ -528,18 +521,16 @@ export function insertMoment(clipId: string, momentId: string) {
 export function addText() {
   const p = store.get().project;
   const total = totalDuration(p.segments) || 3;
-  const t = Math.min(engine.time, Math.max(0, total - 1));
-  const tx: TextOverlay = {
-    id: uid("t"),
-    text: "Your text",
-    start: t,
-    end: Math.min(total, t + 2.5),
-    style: "bold",
-    anim: "pop",
-    y: 0.72,
-    size: 0.085,
-    color: "#ffffff",
-  };
+  // The first text is the POV caption above the picture, for the whole reel.
+  const hasAbove = p.texts.some((x) => x.place === "above");
+  const tx: TextOverlay = hasAbove
+    ? {
+        ...captionText("your words", total, uid("t")),
+        start: Math.min(engine.time, Math.max(0, total - 1)),
+        end: Math.min(total, engine.time + 2.5),
+        place: "below",
+      }
+    : captionText("POV: ", total, uid("t"));
   store.edit((pr) => ({ ...pr, texts: [...pr.texts, tx] }));
   store.ui({ selectedText: tx.id, rightTab: "text" });
 }

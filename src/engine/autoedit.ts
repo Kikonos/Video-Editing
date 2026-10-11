@@ -25,27 +25,35 @@ export interface AutoEditOptions {
   plan?: DirectorPlan | null;
 }
 
-// Target seconds per shot; the nearest power-of-two number of beats wins.
-const PACE_SHOT: Record<Pace, number> = { chill: 2.4, balanced: 1.1, hype: 0.6 };
-
 export function autoLength(clips: Clip[]): number {
   const moments = clips.reduce((n, c) => n + (c.analysis?.moments.length ?? 0), 0);
-  const est = moments * 1.5;
-  if (est <= 9) return 7;
-  if (est <= 20) return 15;
-  return 30;
+  if (moments < 6) return 9;
+  if (moments < 14) return 12;
+  return 15;
 }
 
-interface Slot {
+export interface Slot {
   start: number;
   end: number;
   energy: number;
   /** Energy jump compared to the previous slot. */
   rise: number;
   downbeat: boolean;
+  /** This shot starts where the song kicks in (the drop). */
+  drop: boolean;
+  /** Length in beats. */
+  beats: number;
 }
 
-/** Split the reel into shots whose edges sit on beats. */
+// Shot lengths in beats for the relaxed "story" pace, cycled through. Matches
+// the road-trip reference: mostly two beats, some longer holds, a few quick ones.
+const STORY = [3, 2, 4, 2, 1, 1, 2, 4, 2, 3, 2, 2];
+
+/**
+ * Split the reel into shots whose edges sit on beats. At the "beat" pace every
+ * beat is a cut, except a short hold on the opening shot, on the drop and on
+ * the final shot, which is how the reference montages breathe.
+ */
 export function planSlots(song: Song | null, songStart: number, length: number, pace: Pace): Slot[] {
   const period = song && song.bpm > 0 ? 60 / song.bpm : 0.5;
   let grid: number[];
@@ -68,7 +76,7 @@ export function planSlots(song: Song | null, songStart: number, length: number, 
     energy = grid.map(() => 0.6);
     downs = new Set(grid.map((_, k) => (k % 4 === 0 ? k : -1)).filter((k) => k >= 0));
   }
-  if (!grid.length) return [{ start: 0, end: length, energy: 0.5, rise: 0, downbeat: true }];
+  if (!grid.length) return [{ start: 0, end: length, energy: 0.5, rise: 0, downbeat: true, drop: false, beats: 1 }];
   if (grid[0] > 0.08) {
     grid.unshift(0);
     energy.unshift(energy[0]);
@@ -87,29 +95,43 @@ export function planSlots(song: Song | null, songStart: number, length: number, 
   });
   if (endIdx === 0) endIdx = grid.length - 1;
 
-  const base = Math.max(1, Math.min(8, Math.pow(2, Math.round(Math.log2(PACE_SHOT[pace] / period)))));
+  // The drop: the bar line where the next bars get clearly louder than the last ones.
+  let dropIdx = -1;
+  let bestRise = 0.15;
+  for (const k of downs) {
+    if (k < 4 || k > endIdx - 4) continue;
+    const mean = (a: number, b: number) => {
+      let s = 0;
+      for (let j = a; j < b; j++) s += energy[j];
+      return s / Math.max(1, b - a);
+    };
+    const rise = mean(k, Math.min(endIdx, k + 8)) - mean(Math.max(0, k - 8), k);
+    if (rise > bestRise) {
+      bestRise = rise;
+      dropIdx = k;
+    }
+  }
+
+  // Faster than ~200 BPM the beat is too quick to cut on; double up.
+  const fast = period < 0.3 ? 2 : 1;
   const cuts = [0];
   let i = 0;
+  let shot = 0;
   while (i < endIdx) {
-    const e = energy[i];
-    let n = base;
-    // Loud passages cut faster only at the fast pace; quiet ones breathe at any pace.
-    if (e > 0.78 && pace === "hype") n = Math.max(1, n / 2);
-    if (e < 0.3) n = Math.min(8, n * 2);
-    let next = i + n;
-    // Prefer to land long shots on a bar line.
-    if (n >= 4) {
-      for (let k = next; k > i + n / 2; k--) {
-        if (downs.has(k)) {
-          next = k;
-          break;
-        }
-      }
+    let n: number;
+    if (pace === "story") n = STORY[shot % STORY.length] * fast;
+    else {
+      n = (pace === "two" ? 2 : 1) * fast;
+      if (shot === 0 || i === dropIdx) n *= 2;
     }
-    // Fold a stub of a final shot into the one before it.
-    if (next >= endIdx || endIdx - next < Math.max(1, Math.ceil(n * 0.75))) next = endIdx;
+    let next = i + n;
+    // Never cut just before the drop: land on it so the drop starts a new shot.
+    if (dropIdx > i && dropIdx < next) next = dropIdx;
+    // The last shot holds for at least two beats.
+    if (next >= endIdx || endIdx - next < 2 * fast) next = endIdx;
     cuts.push(next);
     i = next;
+    shot++;
   }
   const slots: Slot[] = [];
   for (let k = 0; k < cuts.length - 1; k++) {
@@ -118,7 +140,7 @@ export function planSlots(song: Song | null, songStart: number, length: number, 
     let e = 0;
     for (let j = a; j < b; j++) e += energy[j];
     e /= Math.max(1, b - a);
-    slots.push({ start: grid[a], end: grid[b], energy: e, rise: 0, downbeat: downs.has(a) });
+    slots.push({ start: grid[a], end: grid[b], energy: e, rise: 0, downbeat: downs.has(a), drop: a === dropIdx, beats: b - a });
   }
   slots.forEach((s, k) => {
     s.rise = k > 0 ? s.energy - slots[k - 1].energy : 0;
@@ -211,19 +233,12 @@ function orderPicks(picks: Moment[], slots: Slot[], clips: Clip[], opts: AutoEdi
   return ordered;
 }
 
-function pickTransition(style: StyleId, slot: Slot, k: number, barCount: number): TransitionKind {
-  if (k === 0) return "cut";
-  const def = STYLES[style];
-  if (slot.rise > 0.22) return def.rise;
-  const len = slot.end - slot.start;
-  if (slot.energy < 0.42 && def.calm !== "cut" && len >= 0.9) return def.calm;
-  if (slot.downbeat) {
-    const t = def.bar[barCount % def.bar.length];
-    if (t === "fade" && len < 0.8) return "cut";
-    return t;
-  }
-  return "cut";
-}
+const POV_LINES = [
+  "POV: the summer you'll talk about forever",
+  "POV: you said yes to every plan",
+  "POV: a week you never want to end",
+  "POV: you and your favourite people",
+];
 
 export function autoEdit(clips: Clip[], song: Song | null, base: Project, opts: AutoEditOptions): Project {
   const ready = clips.filter((c) => c.status === "ready" && c.analysis && c.analysis.moments.length);
@@ -236,13 +251,23 @@ export function autoEdit(clips: Clip[], song: Song | null, base: Project, opts: 
   const def = STYLES[opts.style];
 
   const usedOffsets = new Map<string, number>();
-  let bars = 0;
-  const segments: Segment[] = slots.map((slot, k) => {
-    const m = picks[k % picks.length];
-    const clip = clipOf(ready, m.clipId)!;
+  const segments: Segment[] = [];
+  let pick = 0;
+  slots.forEach((slot, k) => {
     const d = slot.end - slot.start;
+    const prev = segments[segments.length - 1];
+    // Punch-in: keep rolling the previous take but cut in tighter on the beat.
+    if (def.punchIn > 0 && prev && k % def.punchIn === 0 && prev.zoom === 1 && !slot.drop && slot.beats <= 2) {
+      const clip = clipOf(ready, prev.clipId);
+      const srcIn = prev.srcIn + prev.duration * prev.speed;
+      if (clip && srcIn + d * prev.speed <= clip.duration) {
+        segments.push({ ...prev, id: uid("s"), srcIn, duration: d, transition: "cut", zoom: 1.3 });
+        return;
+      }
+    }
+    const m = picks[pick++ % picks.length];
+    const clip = clipOf(ready, m.clipId)!;
     let speed = 1;
-    if (def.slowmo && slot.energy < 0.5 && d >= 1) speed = 0.6;
     let need = d * speed;
     if (clip.duration < need) {
       speed = Math.max(0.5, clip.duration / d);
@@ -253,9 +278,8 @@ export function autoEdit(clips: Clip[], song: Song | null, base: Project, opts: 
     usedOffsets.set(m.id, seen + 1);
     let srcIn = m.t - need * 0.45 + seen * need;
     srcIn = Math.max(0, Math.min(srcIn, Math.max(0, clip.duration - need)));
-    const transition = pickTransition(opts.style, slot, k, bars);
-    if (slot.downbeat && k > 0) bars++;
-    return {
+    const transition: TransitionKind = k > 0 && slot.drop && def.smear ? "smear" : "cut";
+    segments.push({
       id: uid("s"),
       clipId: clip.id,
       momentId: m.id,
@@ -265,33 +289,23 @@ export function autoEdit(clips: Clip[], song: Song | null, base: Project, opts: 
       transition,
       reframe: null,
       zoom: 1,
-    };
+    });
   });
 
   const total = segments.reduce((a, s) => a + s.duration, 0);
   const texts: TextOverlay[] = base.texts.filter((t) => !t.id.startsWith("auto-") && t.start < total);
-  const title = opts.plan?.title?.trim();
-  if (title) {
-    const end = Math.min(total, Math.max(1.8, segments.slice(0, 2).reduce((a, s) => a + s.duration, 0)));
-    texts.unshift({
-      id: "auto-title",
-      text: title,
-      start: 0,
-      end,
-      style: opts.style === "vintage" || opts.style === "cinematic" ? "serif" : "bold",
-      anim: "pop",
-      y: 0.42,
-      size: 0.1,
-      color: "#ffffff",
-    });
+  if (def.caption) {
+    const line = opts.plan?.title?.trim() || POV_LINES[Math.floor((songStart * 7 + segments.length) % POV_LINES.length)];
+    texts.unshift(captionText(line, total));
   }
 
   return {
     ...base,
+    frame: def.frame,
     look: def.look,
     lookAmount: def.lookAmount,
     adjust: { ...NEUTRAL_ADJUST, ...def.adjust },
-    beatPulse: def.beatPulse,
+    beatPulse: 0,
     songId: song?.id ?? null,
     songStart,
     segments,
@@ -299,6 +313,11 @@ export function autoEdit(clips: Clip[], song: Song | null, base: Project, opts: 
     caption: opts.plan?.caption ?? base.caption,
     hashtags: opts.plan?.hashtags ?? base.hashtags,
   };
+}
+
+/** The small serif line that sits in the black space above the picture. */
+export function captionText(text: string, total: number, id = "auto-caption"): TextOverlay {
+  return { id, text, start: 0, end: total, style: "caption", anim: "none", place: "above", y: 0.2, size: 0.042, color: "#ffffff" };
 }
 
 /** A different good moment to swap into a shot ("Try another take"). */

@@ -229,8 +229,9 @@ export function pickMoments(samples: FrameSample[], duration: number, clipId: st
     }
     return acc / w;
   });
-  const maxMoments = Math.max(1, Math.min(16, Math.round(duration / 3)));
-  const gap = Math.max(1.6, Math.min(4, duration / 10));
+  // Montages cut on every beat, so they need many distinct moments per clip.
+  const maxMoments = Math.max(1, Math.min(30, Math.round(duration / 1.6)));
+  const gap = Math.max(1.2, Math.min(3, duration / 14));
   const order = smooth.map((v, i) => [v, i] as const).sort((a, b) => b[0] - a[0]);
   const picked: number[] = [];
   for (const [, i] of order) {

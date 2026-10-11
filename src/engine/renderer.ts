@@ -154,6 +154,8 @@ export class Renderer {
   private overlayProg: WebGLProgram;
   private overlayTex: WebGLTexture;
   private overlayLoc: WebGLUniformLocation | null;
+  /** Where layers are drawn: the picture band, x/y from the top-left. */
+  private vp: [number, number, number, number] = [0, 0, 1, 1];
   lost = false;
 
   constructor(canvas: HTMLCanvasElement) {
@@ -223,7 +225,13 @@ export class Renderer {
       this.canvas.width = w;
       this.canvas.height = h;
     }
-    this.gl.viewport(0, 0, w, h);
+    this.setBand(0, 0, w, h);
+  }
+
+  /** Draw layers into this rectangle (the film-frame band); the rest stays black. */
+  setBand(x: number, y: number, w: number, h: number): void {
+    this.vp = [x, y, Math.max(1, w), Math.max(1, h)];
+    this.gl.viewport(x, this.canvas.height - y - h, Math.max(1, w), Math.max(1, h));
   }
 
   clear(): void {
@@ -245,8 +253,8 @@ export class Renderer {
     } catch {
       // Frame not decodable yet; keep whatever the texture held.
     }
-    const W = this.canvas.width;
-    const H = this.canvas.height;
+    const W = this.vp[2];
+    const H = this.vp[3];
     gl.uniform1i(u.u_tex, 0);
     gl.uniform4fv(u.u_crop, cropRect(layer.srcW, layer.srcH, W, H, layer.focusX, layer.focusY, layer.zoom));
     gl.uniform1f(u.u_kick, Math.max(0.2, layer.kick));
@@ -279,6 +287,7 @@ export class Renderer {
   overlay(source: TexImageSource): void {
     if (this.lost) return;
     const gl = this.gl;
+    gl.viewport(0, 0, this.canvas.width, this.canvas.height);
     gl.useProgram(this.overlayProg);
     gl.activeTexture(gl.TEXTURE0);
     gl.bindTexture(gl.TEXTURE_2D, this.overlayTex);
@@ -287,5 +296,7 @@ export class Renderer {
     gl.enable(gl.BLEND);
     gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
     gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
+    const [x, y, w, h] = this.vp;
+    gl.viewport(x, this.canvas.height - y - h, w, h);
   }
 }

@@ -82,7 +82,36 @@ export interface Song {
   peaks: number[];
 }
 
-export type TransitionKind = "cut" | "fade" | "flash" | "zoom" | "whip" | "glitch";
+/**
+ * How a shot starts. Montage reels are almost all hard cuts; "smear" is the
+ * motion-blur + white-flash bridge used once, where the song changes section.
+ */
+export type TransitionKind = "cut" | "fade" | "flash" | "smear";
+
+/**
+ * The picture sits in a horizontal band inside the black 9:16 Reel, like a
+ * film frame. "full" fills the whole vertical screen instead.
+ */
+export type FrameId = "16:9" | "4:3" | "1:1" | "full";
+
+export const FRAMES: Record<FrameId, { ratio: number; label: string }> = {
+  "16:9": { ratio: 16 / 9, label: "Cinema" },
+  "4:3": { ratio: 4 / 3, label: "Classic" },
+  "1:1": { ratio: 1, label: "Square" },
+  full: { ratio: 0, label: "Full screen" },
+};
+
+/** Vertical centre of the picture band, as a fraction of the frame height. */
+export const BAND_CENTER = 0.45;
+
+/** Picture band inside a W×H frame: x, y (from top), width, height. */
+export function bandRect(frame: FrameId, W: number, H: number): [number, number, number, number] {
+  const ratio = FRAMES[frame].ratio;
+  if (!ratio) return [0, 0, W, H];
+  const h = Math.min(H, Math.round(W / ratio));
+  const y = Math.max(0, Math.min(H - h, Math.round(H * BAND_CENTER - h / 2)));
+  return [0, y, W, h];
+}
 
 export interface Segment {
   id: string;
@@ -100,8 +129,10 @@ export interface Segment {
   zoom: number;
 }
 
-export type TextStyle = "bold" | "serif" | "box" | "neon" | "hand";
-export type TextAnim = "pop" | "fade" | "type" | "rise";
+export type TextStyle = "caption" | "serif" | "bold" | "hand";
+export type TextAnim = "none" | "fade" | "type" | "rise" | "pop";
+/** Where text sits: in the black space above or below the picture, or anywhere. */
+export type TextPlace = "above" | "below" | "free";
 
 export interface TextOverlay {
   id: string;
@@ -110,7 +141,8 @@ export interface TextOverlay {
   end: number;
   style: TextStyle;
   anim: TextAnim;
-  /** Vertical position of the text block's centre, 0 = top, 1 = bottom. */
+  place: TextPlace;
+  /** Vertical position of the text block's centre for "free" text, 0 = top, 1 = bottom. */
   y: number;
   /** Font size as a fraction of the frame width. */
   size: number;
@@ -127,10 +159,11 @@ export interface Adjust {
   grain: number;
 }
 
-export type LookId = "natural" | "vivid" | "golden" | "teal" | "film" | "mono" | "moody" | "dreamy";
+export type LookId = "natural" | "cinema" | "summer" | "postcard" | "dusk" | "mono";
 
 export interface Project {
   aspect: Aspect;
+  frame: FrameId;
   look: LookId;
   lookAmount: number;
   adjust: Adjust;
@@ -148,8 +181,9 @@ export interface Project {
   hashtags: string[];
 }
 
-export type StyleId = "clean" | "hype" | "cinematic" | "vintage" | "moody";
-export type Pace = "chill" | "balanced" | "hype";
+export type StyleId = "cinema" | "roadtrip" | "summer";
+/** "beat": a cut on every beat. "two": every second beat. "story": relaxed, 2–4 beats following the phrase. */
+export type Pace = "beat" | "two" | "story";
 
 export const NEUTRAL_ADJUST: Adjust = {
   exposure: 0,
@@ -164,7 +198,8 @@ export const NEUTRAL_ADJUST: Adjust = {
 export function emptyProject(): Project {
   return {
     aspect: "9:16",
-    look: "natural",
+    frame: "16:9",
+    look: "cinema",
     lookAmount: 1,
     adjust: { ...NEUTRAL_ADJUST },
     beatPulse: 0,

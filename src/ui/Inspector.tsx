@@ -19,7 +19,7 @@ import { autoLength } from "../engine/autoedit.ts";
 import { LOOKS, STYLES } from "../engine/looks.ts";
 import { TEXT_STYLES } from "../engine/text.ts";
 import { formatTime, segmentStarts, TRANSITION_LABEL } from "../engine/timeline.ts";
-import { NEUTRAL_ADJUST, type Adjust, type LookId, type Pace, type StyleId, type TextAnim, type TextStyle, type TransitionKind } from "../engine/types.ts";
+import { FRAMES, NEUTRAL_ADJUST, type Adjust, type FrameId, type LookId, type Pace, type StyleId, type TextAnim, type TextPlace, type TextStyle, type TransitionKind } from "../engine/types.ts";
 import { store, useStore, type RightTab } from "../store.ts";
 import { Field, Segmented, Slider, Toggle } from "./controls.tsx";
 import { Icon } from "./icons.tsx";
@@ -75,7 +75,7 @@ function AutoPanel() {
     <div className="stack">
       <div>
         <h2 className="panel-title">Make the reel</h2>
-        <p className="lede">Picks the strongest moments from every clip and cuts them on the beat of your music.</p>
+        <p className="lede">A film-frame montage of your best moments, one shot per beat of the music.</p>
       </div>
       <Field label="Style">
         <div className="styles">
@@ -100,9 +100,9 @@ function AutoPanel() {
           value={auto.pace}
           onChange={(v) => set({ pace: v })}
           options={[
-            { value: "chill", label: "Chill", title: "Long shots, about 2–3 s" },
-            { value: "balanced", label: "Balanced", title: "About 1–1.5 s per shot" },
-            { value: "hype", label: "Fast", title: "Cut on almost every beat" },
+            { value: "beat", label: "Every beat", title: "A new shot on every beat, holding on the intro, the drop and the end" },
+            { value: "two", label: "Every 2 beats", title: "A new shot every second beat" },
+            { value: "story", label: "Relaxed", title: "Shots of 1 to 4 beats that follow the music's phrases" },
           ]}
         />
       </Field>
@@ -113,10 +113,10 @@ function AutoPanel() {
           onChange={(v) => set({ length: v })}
           options={[
             { value: "auto", label: "Auto" },
-            { value: 7, label: "7s" },
+            { value: 10, label: "10s" },
             { value: 15, label: "15s" },
+            { value: 20, label: "20s" },
             { value: 30, label: "30s" },
-            { value: 60, label: "60s" },
           ]}
         />
       </Field>
@@ -131,7 +131,7 @@ function AutoPanel() {
           ]}
         />
       </Field>
-      <Toggle checked={auto.hook} onChange={(v) => set({ hook: v })} label="Open with the best shot" hint="A strong first second stops the scroll." />
+      <Toggle checked={auto.hook} onChange={(v) => set({ hook: v })} label="Open with the best shot" hint="The most beautiful shot goes first, held for two beats." />
       {aiOn ? (
         <Toggle
           checked={auto.useAI}
@@ -141,7 +141,7 @@ function AutoPanel() {
               <Icon name="spark" size={14} /> AI Director
             </>
           }
-          hint="Claude looks at your best moments, chooses the running order and writes the caption. Uses your Claude account."
+          hint="Claude looks at your best moments, picks the most atmospheric ones and their order, and writes the caption. Uses your Claude account."
         />
       ) : (
         <p className="hint">
@@ -181,7 +181,7 @@ function AutoPanel() {
 // --------------------------------------------------------------------- shot
 
 const SPEEDS = [0.5, 0.75, 1, 1.5, 2];
-const TRANSITIONS: TransitionKind[] = ["cut", "fade", "flash", "zoom", "whip", "glitch"];
+const TRANSITIONS: TransitionKind[] = ["cut", "smear", "flash", "fade"];
 
 function ShotPanel() {
   const selected = useStore((s) => s.ui.selectedSeg);
@@ -388,26 +388,38 @@ function LookPanel() {
   const look = useStore((s) => s.project.look);
   const amount = useStore((s) => s.project.lookAmount);
   const adjust = useStore((s) => s.project.adjust);
-  const pulse = useStore((s) => s.project.beatPulse);
-  const aspect = useStore((s) => s.project.aspect);
+  const frame = useStore((s) => s.project.frame);
   const segments = useStore((s) => s.project.segments);
   const [thumbs, setThumbs] = useState<Record<string, string>>({});
+  const ratio = FRAMES[frame].ratio || 9 / 16;
 
   useEffect(() => {
     const id = setTimeout(() => {
-      const [w, h] = aspect === "16:9" ? [128, 72] : aspect === "1:1" ? [96, 96] : aspect === "4:5" ? [96, 120] : [81, 144];
-      setThumbs(engine.renderLookThumbs(Object.keys(LOOKS) as LookId[], w * 2, h * 2));
+      const w = ratio >= 1 ? 192 : 120;
+      setThumbs(engine.renderLookThumbs(Object.keys(LOOKS) as LookId[], w, Math.round(w / ratio)));
     }, 120);
     return () => clearTimeout(id);
-  }, [adjust, aspect, segments]);
+  }, [adjust, ratio, segments]);
 
   return (
     <div className="stack">
-      <h2 className="panel-title">Look</h2>
+      <h2 className="panel-title">Frame &amp; look</h2>
+      <Field label="Frame">
+        <Segmented<FrameId>
+          label="Frame"
+          value={frame}
+          onChange={(v) => setProject({ frame: v })}
+          options={(Object.keys(FRAMES) as FrameId[]).map((f) => ({
+            value: f,
+            label: f === "full" ? "Full" : f,
+            title: f === "full" ? "Fill the whole vertical screen" : `${FRAMES[f].label}: a ${f} picture with black above and below`,
+          }))}
+        />
+      </Field>
       <div className="looks">
         {(Object.keys(LOOKS) as LookId[]).map((id) => (
           <button key={id} type="button" className={`look ${look === id ? "on" : ""}`} aria-pressed={look === id} onClick={() => setProject({ look: id })}>
-            <span className="look-img" style={{ aspectRatio: aspect.replace(":", " / ") }}>
+            <span className="look-img" style={{ aspectRatio: String(ratio) }}>
               {thumbs[id] ? <img src={thumbs[id]} alt="" /> : <span className={`look-fallback lk-${id}`} />}
             </span>
             <span>{LOOKS[id].label}</span>
@@ -437,7 +449,6 @@ function LookPanel() {
           />
         ))}
       </Field>
-      <Slider id="pulse" label="Beat zoom" value={pulse} min={0} max={1} onChange={(v) => setProject({ beatPulse: v }, "pulse")} format={(v) => (v === 0 ? "Off" : `${Math.round(v * 100)}%`)} />
     </div>
   );
 }
@@ -446,10 +457,16 @@ function LookPanel() {
 
 const SWATCHES = ["#ffffff", "#111111", "#ffc27a", "#ff7a6e", "#7ce0d6", "#ffe14d"];
 const ANIMS: { value: TextAnim; label: string }[] = [
-  { value: "pop", label: "Pop" },
+  { value: "none", label: "None" },
   { value: "fade", label: "Fade" },
   { value: "type", label: "Type" },
   { value: "rise", label: "Rise" },
+];
+
+const PLACES: { value: TextPlace; label: string }[] = [
+  { value: "above", label: "Above picture" },
+  { value: "below", label: "Below picture" },
+  { value: "free", label: "On picture" },
 ];
 
 function TextPanel() {
@@ -466,7 +483,7 @@ function TextPanel() {
           <Icon name="plus" size={15} /> Add text
         </button>
       </div>
-      {!texts.length && <p className="lede">Add a title, a place name or a punchline. It's drawn into the video when you export.</p>}
+      {!texts.length && <p className="lede">Add a small "POV: …" line above the picture, like the road-trip reels. It's drawn into the video when you export.</p>}
       {texts.length > 0 && (
         <ul className="text-list">
           {texts.map((t) => (
@@ -509,6 +526,9 @@ function TextPanel() {
               ))}
             </div>
           </Field>
+          <Field label="Where">
+            <Segmented<TextPlace> label="Where" value={tx.place ?? "free"} onChange={(v) => updateText(tx.id, { place: v })} options={PLACES} />
+          </Field>
           <Field label="Animation">
             <Segmented<TextAnim> label="Animation" value={tx.anim} onChange={(v) => updateText(tx.id, { anim: v })} options={ANIMS} />
           </Field>
@@ -527,8 +547,8 @@ function TextPanel() {
               ))}
             </div>
           </Field>
-          <Slider id="text-y" label="Position" value={tx.y} min={0.08} max={0.92} onChange={(v) => updateText(tx.id, { y: v }, "y-" + tx.id)} format={(v) => (v < 0.33 ? "Top" : v > 0.66 ? "Bottom" : "Middle")} />
-          <Slider id="text-size" label="Size" value={tx.size} min={0.04} max={0.18} onChange={(v) => updateText(tx.id, { size: v }, "size-" + tx.id)} format={(v) => `${Math.round(v * 100)}`} />
+          {(tx.place ?? "free") === "free" && <Slider id="text-y" label="Position" value={tx.y} min={0.08} max={0.92} onChange={(v) => updateText(tx.id, { y: v }, "y-" + tx.id)} format={(v) => (v < 0.33 ? "Top" : v > 0.66 ? "Bottom" : "Middle")} />}
+          <Slider id="text-size" label="Size" value={tx.size} min={0.025} max={0.14} onChange={(v) => updateText(tx.id, { size: v }, "size-" + tx.id)} format={(v) => `${Math.round(v * 100)}`} />
           <Slider id="text-start" label="Appears" value={tx.start} min={0} max={Math.max(0.1, total - 0.2)} step={0.01} onChange={(v) => updateText(tx.id, { start: v, end: Math.max(v + 0.3, tx.end) }, "start-" + tx.id)} format={(v) => `${v.toFixed(2)}s`} />
           <Slider id="text-end" label="Disappears" value={tx.end} min={0.2} max={Math.max(0.3, total)} step={0.01} onChange={(v) => updateText(tx.id, { end: Math.max(tx.start + 0.3, v) }, "end-" + tx.id)} format={(v) => `${v.toFixed(2)}s`} />
           <div className="row gap">

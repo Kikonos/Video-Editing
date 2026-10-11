@@ -1,5 +1,5 @@
 // Folds the `vite build --mode artifact` output into one self-contained page
-// (CSS and JS inlined) in the shape the Claude artifact viewer expects: page
+// (CSS and app JS inlined, React from cdnjs) in the shape the Claude artifact viewer expects: page
 // content only, with <title> and <style> first; the viewer adds the document
 // skeleton. Output: artifact/reel-room.html
 import { readFileSync, writeFileSync, mkdirSync } from "node:fs";
@@ -18,12 +18,17 @@ const title = /<title>[\s\S]*?<\/title>/.exec(html)?.[0] ?? "<title>Reel Room</t
 const fontLinks = [...html.matchAll(/<link[^>]+href="https:\/\/fonts\.(googleapis|gstatic)\.com[^"]*"[^>]*>/g)].map((m) => m[0]);
 const safeJs = js.join("\n").replace(/<\/script/gi, "<\\/script");
 
+const REACT = "https://cdnjs.cloudflare.com/ajax/libs/react/18.3.1/umd/react.production.min.js";
+const REACT_DOM = "https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.3.1/umd/react-dom.production.min.js";
+
 const page = [
   title,
   `<style>\n${css.join("\n")}\n</style>`,
   ...fontLinks,
   `<div id="root"></div>`,
-  `<script type="module">\n${safeJs}\n</script>`,
+  `<script src="${REACT}"></script>`,
+  `<script src="${REACT_DOM}"></script>`,
+  `<script>\n${safeJs}\n</script>`,
   "",
 ].join("\n");
 

@@ -64,6 +64,7 @@ function AutoPanel() {
   const note = useStore((s) => s.ui.directorNote);
   const clips = useStore((s) => s.clips);
   const song = useStore((s) => s.songs.find((x) => x.id === s.project.songId) ?? null);
+  const hasShots = useStore((s) => s.project.segments.length > 0);
   const ready = clips.filter((c) => c.status === "ready");
   const pending = clips.filter((c) => c.status === "loading" || c.status === "analyzing").length;
   const moments = ready.reduce((n, c) => n + (c.analysis?.moments.length ?? 0), 0);
@@ -165,7 +166,7 @@ function AutoPanel() {
             });
           }}
         >
-          <Icon name="spark" size={18} /> {store.get().project.segments.length ? "Re-cut the reel" : "Make my reel"}
+          <Icon name="spark" size={18} /> {hasShots ? "Re-cut the reel" : "Make my reel"}
         </button>
       )}
       <p className="status-line num">

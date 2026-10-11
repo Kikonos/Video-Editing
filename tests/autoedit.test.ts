@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { autoEdit, planSlots, selectMoments } from "../src/engine/autoedit.ts";
+import { autoEdit, moveContent, planSlots, retime, selectMoments } from "../src/engine/autoedit.ts";
 import { pickMoments, scoreSamples, type RawSample } from "../src/engine/metrics.ts";
 import { bandRect, emptyProject, type Clip, type Song } from "../src/engine/types.ts";
 
@@ -114,4 +114,44 @@ test("film frame band sits slightly above centre in the 9:16 Reel", () => {
   assert.deepEqual(bandRect("16:9", 1080, 1920), [0, 560, 1080, 608]);
   assert.deepEqual(bandRect("4:3", 1080, 1920), [0, 459, 1080, 810]);
   assert.deepEqual(bandRect("full", 1080, 1920), [0, 0, 1080, 1920]);
+});
+
+test("moving a snippet keeps every beat slot in place", () => {
+  const s = song(115, 60);
+  const clips = [fakeClip("a", 40, 5, 1), fakeClip("b", 40, 9, 2), fakeClip("c", 40, 20, 3)];
+  const p = autoEdit(clips, s, emptyProject(), { style: "cinema", pace: "beat", length: 15, order: "story", hook: true, songStart: s.downbeats[2] });
+  const moved = moveContent(p.segments, 5, 1, clips);
+  assert.deepEqual(moved.map((x) => x.duration), p.segments.map((x) => x.duration), "durations unchanged");
+  assert.deepEqual(moved.map((x) => x.transition), p.segments.map((x) => x.transition), "transitions stay with the slot");
+  assert.equal(moved[1].momentId, p.segments[5].momentId, "the moved picture lands in slot 1");
+  for (const seg of moved) {
+    const clip = clips.find((c) => c.id === seg.clipId)!;
+    assert.ok(seg.srcIn >= 0 && seg.srcIn + seg.duration * seg.speed <= clip.duration + 1e-6, "still inside its clip");
+  }
+});
+
+test("new music re-times the reel but keeps the hand-made order", () => {
+  const a = song(115, 60);
+  const b = song(128, 60);
+  const clips = [fakeClip("a", 40, 5, 1), fakeClip("b", 40, 9, 2), fakeClip("c", 40, 20, 3)];
+  const opts = { style: "cinema" as const, pace: "beat" as const, length: 15, order: "story" as const, hook: true, songStart: a.downbeats[2] };
+  const p = autoEdit(clips, a, emptyProject(), opts);
+  const arranged = { ...p, segments: moveContent(p.segments, 6, 0, clips) };
+  const r = retime(clips, b, arranged, { ...opts, songStart: b.downbeats[2] });
+  const n = Math.min(r.segments.length, arranged.segments.length);
+  for (let i = 0; i < n; i++) assert.equal(r.segments[i].momentId, arranged.segments[i].momentId, `slot ${i} keeps its picture`);
+  let t = r.songStart;
+  for (const seg of r.segments) {
+    t += seg.duration;
+    assert.ok(Math.min(...b.beats.map((x) => Math.abs(x - t))) < 0.002, "cuts on the new beat");
+  }
+});
+
+test("hand-picked moments always make the cut", () => {
+  const s = song(115, 60);
+  const clips = [fakeClip("a", 40, 5, 1), fakeClip("b", 40, 9, 2)];
+  const mine = { id: "mine", clipId: "b", t: 33, start: 31.4, end: 34.6, score: 0.05, motion: 0.1, manual: true };
+  clips[1].analysis!.moments.push(mine);
+  const p = autoEdit(clips, s, emptyProject(), { style: "cinema", pace: "beat", length: 15, order: "story", hook: true, songStart: s.downbeats[2] });
+  assert.ok(p.segments.some((x) => x.momentId === "mine"), "the low-scoring hand pick is in the reel");
 });

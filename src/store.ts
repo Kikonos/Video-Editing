@@ -2,7 +2,7 @@ import { useSyncExternalStore } from "react";
 import type { Clip, Pace, Project, Song, StyleId } from "./engine/types.ts";
 import { emptyProject } from "./engine/types.ts";
 
-export type RightTab = "auto" | "shot" | "look" | "text" | "audio";
+export type RightTab = "auto" | "shots" | "shot" | "look" | "text" | "audio";
 export type LeftTab = "footage" | "music";
 
 export interface AutoSettings {
@@ -45,6 +45,10 @@ export interface UiState {
   ai: { available: boolean; images: boolean; checked: boolean };
   directorNote: string | null;
   demo: boolean;
+  /** The viewer rearranged shots by hand; automatic re-cuts must keep their order. */
+  arranged: boolean;
+  /** Clip open in the moment picker. */
+  pickerClip: string | null;
 }
 
 export interface State {
@@ -76,6 +80,8 @@ const initial: State = {
     ai: { available: false, images: false, checked: false },
     directorNote: null,
     demo: false,
+    arranged: false,
+    pickerClip: null,
   },
   past: [],
   future: [],

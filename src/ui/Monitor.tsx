@@ -28,6 +28,7 @@ export function Monitor() {
   const safe = useStore((s) => s.ui.safeZones);
   const demo = useStore((s) => s.ui.demo);
   const busy = useStore((s) => s.ui.busy);
+  const scanningN = useStore((s) => s.clips.filter((c) => c.status === "loading" || c.status === "analyzing").length);
   const [dragging, setDragging] = useState(false);
   const drag = useRef<{ x: number; start: number; span: number; id: string } | null>(null);
   const { w, h } = ASPECTS[aspect];
@@ -114,7 +115,15 @@ export function Monitor() {
           {!segments.length && !busy && (
             <div className="screen-empty">
               <Icon name="spark" size={28} />
-              <p>Import videos and your reel will appear here, cut to the beat.</p>
+              {scanningN > 0 ? (
+                <p>
+                  Finding the best moments in {scanningN} clip{scanningN === 1 ? "" : "s"}…
+                  <br />
+                  Your reel appears here as soon as it's done.
+                </p>
+              ) : (
+                <p>Drop all your videos and add the song. Your reel appears here, cut to the beat.</p>
+              )}
             </div>
           )}
           {demo && segments.length > 0 && <span className="demo-tag">Sample reel</span>}

@@ -7,6 +7,7 @@ import { Icon } from "./ui/icons.tsx";
 import { Inspector } from "./ui/Inspector.tsx";
 import { Library } from "./ui/Library.tsx";
 import { Monitor } from "./ui/Monitor.tsx";
+import { MomentPicker } from "./ui/Shots.tsx";
 import { Timeline } from "./ui/Timeline.tsx";
 
 function useNarrow(): boolean {
@@ -23,6 +24,7 @@ function useNarrow(): boolean {
 
 const MOBILE_TABS: { value: MobileTab; label: string }[] = [
   { value: "auto", label: "Make" },
+  { value: "shots", label: "Shots" },
   { value: "footage", label: "Footage" },
   { value: "music", label: "Music" },
   { value: "shot", label: "Shot" },
@@ -144,6 +146,7 @@ export function App() {
         </div>
       )}
       {exportOpen && <ExportDialog />}
+      <MomentPicker />
     </div>
   );
 }

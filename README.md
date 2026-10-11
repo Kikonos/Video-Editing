@@ -22,6 +22,25 @@ Three styles package these rules:
 | Road trip | 4:3 | relaxed: 1 to 4 beats following the phrases | Summer film | POV caption |
 | Holiday | 1:1 | every beat, punch-ins | Postcard | none |
 
+## How you use it
+
+1. **Add videos:** select all your clips at once on the Make tab (or drop them anywhere). They're scanned two at a time for their best moments.
+2. **Add the song:** from any video that has it, or an audio file. You can add it while the clips are still scanning.
+3. **The reel cuts itself** as soon as both are in. If Claude is available (inside the Claude artifact), the AI Director picks and orders the shots and writes the caption in the same pass.
+
+Then, if you want to change it:
+
+- **Shots tab:** every snippet in order. Drag one to move it. The beat slots stay where they are, so only the pictures change places and every cut stays on the beat. Tap a snippet, then tap any moment in the bin below to swap it in. Earlier/Later buttons do the same without dragging.
+- **Pick your own:** scrub through any clip and mark a moment. It goes into the selected shot (or replaces the weakest one), and every later re-cut keeps it.
+- **Your arrangement is kept.** Once you've moved or swapped shots, changing the song re-times the reel in your order instead of starting over. Newly added clips wait for you to press Re-cut.
+
+### Music from Spotify
+
+Spotify doesn't let apps download or extract its music, so there's no Spotify import. Two options:
+
+- Screen-record the song playing (or use any video with the song in it) and add that as the song.
+- Export **without the song** and add the same track in Instagram from its music library. The export screen tells you where in the song to start it, so the cuts line up. Licensed in-app music is also less likely to get the reel muted.
+
 ## What else it does
 
 - **Finds your best moments** on your device: sharpness, exposure, colour, movement, faces where the browser supports it, and loud moments in the clip's own sound.
@@ -31,7 +50,7 @@ Three styles package these rules:
 - **Editing:** a timeline with a beat ruler; drag to reorder, drag a shot's edge to change its length (it snaps to beats); split, duplicate, delete, undo/redo; per-shot source window, speed, transition, framing and zoom; "try another moment".
 - **Text:** caption, editorial, headline and handwritten styles, placed above the picture, below it, or on it.
 - **Sound:** music volume, original clip sound and a fade-out.
-- **Export:** MP4 at 1080×1920 (or 720p), a cover image and a caption ready to copy.
+- **Export:** MP4 at 1080×1920 (or 720p), with or without the song, a cover image and a caption ready to copy.
 
 Keyboard: Space play/pause, S split, D duplicate, Delete remove shot, ←/→ step a frame (Shift for a second), Ctrl/⌘ Z undo, Shift Ctrl/⌘ Z redo.
 

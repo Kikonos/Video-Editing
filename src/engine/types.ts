@@ -38,6 +38,8 @@ export interface Moment {
   motion: number;
   thumb?: string;
   label?: string;
+  /** Picked by hand: always used by the auto-edit. */
+  manual?: boolean;
 }
 
 export interface ClipAnalysis {

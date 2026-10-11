@@ -4,7 +4,8 @@ import { exportFormat, type ExportResult } from "../engine/engine.ts";
 import { saveBlob } from "../engine/platform.ts";
 import { ASPECTS } from "../engine/types.ts";
 import { store, toast, useStore } from "../store.ts";
-import { Segmented } from "./controls.tsx";
+import { Segmented, Toggle } from "./controls.tsx";
+import { formatTime } from "../engine/timeline.ts";
 import { Icon } from "./icons.tsx";
 
 type Phase = "setup" | "rendering" | "done" | "error";
@@ -15,6 +16,9 @@ export function ExportDialog() {
   const hashtags = useStore((s) => s.project.hashtags);
   const ai = useStore((s) => s.ui.ai);
   const [quality, setQuality] = useState<"1080" | "720">("1080");
+  const [withMusic, setWithMusic] = useState(true);
+  const song = useStore((s) => s.songs.find((x) => x.id === s.project.songId) ?? null);
+  const songStart = useStore((s) => s.project.songStart);
   const [phase, setPhase] = useState<Phase>("setup");
   const [progress, setProgress] = useState(0);
   const [result, setResult] = useState<ExportResult | null>(null);
@@ -55,6 +59,7 @@ export function ExportDialog() {
         height: H,
         fps: 30,
         bitrate: quality === "1080" ? 14_000_000 : 8_000_000,
+        includeMusic: withMusic,
         onProgress: setProgress,
         signal: abort.current.signal,
       });
@@ -122,6 +127,14 @@ export function ExportDialog() {
                 { value: "720", label: "720p · smaller file" },
               ]}
             />
+            {song && (
+              <Toggle
+                checked={withMusic}
+                onChange={setWithMusic}
+                label="Song in the video"
+                hint="Turn off to add the song from Instagram's own music library instead. Licensed music there is less likely to get your reel muted."
+              />
+            )}
             {!fmt && <p className="err">This browser can't record video. Open the editor in Chrome, Edge or Safari to export.</p>}
             {fmt?.ext === "webm" && (
               <p className="hint">This browser records WebM. Instagram prefers MP4: if the upload is refused, export from Chrome or Safari instead.</p>
@@ -164,6 +177,13 @@ export function ExportDialog() {
               <p className="num dim">
                 {(result.blob.size / 1024 / 1024).toFixed(1)} MB · {result.ext.toUpperCase()} · {W}×{H}
               </p>
+              {!withMusic && song && (
+                <p className="note">
+                  Exported without music. In Instagram, tap <strong>Add audio</strong>, find your song and start it at{" "}
+                  <strong>{formatTime(songStart, false)}</strong>
+                  {song.source === "video" ? " into the video you took the music from" : ""}. The cuts are timed to that part.
+                </p>
+              )}
               <button className="btn primary big" type="button" onClick={() => void save()}>
                 <Icon name="download" size={18} /> Save video
               </button>

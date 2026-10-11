@@ -3,13 +3,13 @@
 import { aiErrorMessage, fallbackCaption, runDirector, writeCaption } from "./engine/ai.ts";
 import { analyzeClip, demoGrabber, snapshot, videoGrabber, type FrameGrabber } from "./engine/analyze.ts";
 import { analyzeBeats, decodeAudio, encodeWav, loudnessEnvelope, waveformPeaks } from "./engine/audio.ts";
-import { alternativeMoment, autoEdit, autoLength, captionText, fitMoment, planSlots, type DirectorPlan } from "./engine/autoedit.ts";
+import { alternativeMoment, autoEdit, autoLength, captionText, fitMoment, moveContent, planSlots, retime, type DirectorPlan } from "./engine/autoedit.ts";
 import { suggestSection } from "./engine/beats.ts";
 import { DEMO_SCENES, synthDemoSong } from "./engine/demo.ts";
 import { Engine } from "./engine/engine.ts";
 import { aiCaps, getClaude, saveBlob } from "./engine/platform.ts";
 import { segmentStarts, timelineBeats, totalDuration } from "./engine/timeline.ts";
-import type { Aspect, Clip, Project, Segment, Song, TextOverlay } from "./engine/types.ts";
+import type { Aspect, Clip, Moment, Project, Segment, Song, TextOverlay } from "./engine/types.ts";
 import { emptyProject, uid } from "./engine/types.ts";
 import { store, toast } from "./store.ts";
 
@@ -47,58 +47,96 @@ function currentSong(): Song | null {
 // ------------------------------------------------------------------ import
 
 const queue: { id: string; grab: () => Promise<FrameGrabber>; file?: File }[] = [];
-let running = false;
+let active = 0;
+/** Clips are scanned two at a time: enough to keep the decoder busy without starving playback. */
+const PARALLEL = 2;
+let newSinceBuild = 0;
 
-async function runQueue() {
-  if (running) return;
-  running = true;
-  while (queue.length) {
-    const job = queue.shift()!;
-    let g: FrameGrabber | null = null;
-    try {
-      g = await job.grab();
-      const thumb = await snapshot(g, Math.min(1.2, g.duration * 0.25), 320);
-      patchClip(job.id, { width: g.width, height: g.height, duration: g.duration, thumb, status: "analyzing", progress: 0 });
-      let loud: Float32Array | null = null;
-      let hasAudio = false;
-      if (job.file && job.file.size < 250 * 1024 * 1024) {
-        try {
-          const buf = await decodeAudio(job.file);
-          loud = loudnessEnvelope(buf);
-          hasAudio = buf.duration > 0.5;
-        } catch {
-          hasAudio = false;
-        }
+async function scan(job: (typeof queue)[number]) {
+  let g: FrameGrabber | null = null;
+  try {
+    g = await job.grab();
+    const thumb = await snapshot(g, Math.min(1.2, g.duration * 0.25), 320);
+    patchClip(job.id, { width: g.width, height: g.height, duration: g.duration, thumb, status: "analyzing", progress: 0 });
+    let loud: Float32Array | null = null;
+    let hasAudio = false;
+    if (job.file && job.file.size < 250 * 1024 * 1024) {
+      try {
+        const buf = await decodeAudio(job.file);
+        loud = loudnessEnvelope(buf);
+        hasAudio = buf.duration > 0.5;
+      } catch {
+        hasAudio = false;
       }
-      let lastP = 0;
-      const analysis = await analyzeClip(job.id, g, loud, (p) => {
-        if (p - lastP > 0.03 || p >= 1) {
-          lastP = p;
-          patchClip(job.id, { progress: p });
-        }
-      });
-      patchClip(job.id, { analysis, status: "ready", progress: 1, hasAudio });
-    } catch (e) {
-      patchClip(job.id, { status: "error", error: (e as Error).message || "Couldn't read this video." });
-    } finally {
-      g?.dispose();
     }
-  }
-  running = false;
-  onQueueDrained();
-}
-
-function onQueueDrained() {
-  const s = store.get();
-  const ready = s.clips.filter((c) => c.status === "ready");
-  if (ready.length && !s.project.segments.length && !s.ui.busy) {
-    void generate({ silentAI: true }).then(() => {
-      const ui = store.get().ui;
-      if (ui.ai.available && ui.ai.images && ui.auto.useAI) {
-        store.ui({ directorNote: "First cut made on your device. Press Re-cut the reel to let Claude pick the order and write a caption." });
+    let lastP = 0;
+    const analysis = await analyzeClip(job.id, g, loud, (p) => {
+      if (p - lastP > 0.03 || p >= 1) {
+        lastP = p;
+        patchClip(job.id, { progress: p });
       }
     });
+    patchClip(job.id, { analysis, status: "ready", progress: 1, hasAudio });
+  } catch (e) {
+    patchClip(job.id, { status: "error", error: (e as Error).message || "Couldn't read this video." });
+  } finally {
+    g?.dispose();
   }
+}
+
+function runQueue() {
+  while (active < PARALLEL && queue.length) {
+    const job = queue.shift()!;
+    active++;
+    void scan(job).finally(() => {
+      active--;
+      if (queue.length) runQueue();
+      else if (active === 0) void autoBuild("clips");
+    });
+  }
+}
+
+/** Clips still being opened or scanned. */
+export function scanning(): number {
+  return store.get().clips.filter((c) => c.status === "loading" || c.status === "analyzing").length;
+}
+
+/**
+ * The hands-off path: once every dropped clip is scanned, or a song arrives,
+ * the reel cuts itself. A reel the viewer rearranged is never thrown away:
+ * new music re-times it in the same order, and new clips wait for a re-cut.
+ */
+async function autoBuild(reason: "clips" | "song") {
+  const s = store.get();
+  if (scanning() > 0 || s.ui.busy) return;
+  const ready = s.clips.filter((c) => c.status === "ready" && c.analysis?.moments.length);
+  if (!ready.length) return;
+  const song = currentSong();
+  if (!s.project.segments.length || !s.ui.arranged) {
+    newSinceBuild = 0;
+    // A cut without music is only a preview, so Claude is asked once the song is in.
+    await generate({ silentAI: !song, keepPlan: reason === "song" && !!lastPlan });
+    if (!song) store.ui({ directorNote: "Rough cut on a steady beat. Add your song in the Music tab and the reel re-cuts to it." });
+    return;
+  }
+  if (reason === "song") {
+    retimeToSong();
+    return;
+  }
+  if (newSinceBuild > 0) {
+    store.ui({
+      directorNote: `${newSinceBuild} new clip${newSinceBuild === 1 ? " is" : "s are"} ready. Your arrangement is kept: press Re-cut the reel to include them, or swap their moments in from the Shots tab.`,
+    });
+  }
+}
+
+function retimeToSong() {
+  const s = store.get();
+  const auto = s.ui.auto;
+  const next = retime(s.clips, currentSong(), s.project, { ...auto, songStart: s.project.songStart, plan: null });
+  store.edit(() => next);
+  store.ui({ directorNote: "Re-cut to the new song. Your shot order is kept." });
+  engine.seek(0);
 }
 
 function clearDemo() {
@@ -153,7 +191,8 @@ export function importFiles(list: FileList | File[]) {
   if (newClips.length) {
     store.set((s) => ({ ...s, clips: [...s.clips, ...newClips] }));
     store.ui({ leftTab: "footage" });
-    void runQueue();
+    newSinceBuild += newClips.length;
+    runQueue();
   }
   if (audios.length) void importMusic(audios[0]);
 }
@@ -184,8 +223,7 @@ async function addSong(buffer: AudioBuffer, name: string, source: Song["source"]
   const start = suggestSection(song, song.duration, len);
   store.set((st) => ({ ...st, songs: [...st.songs.filter((x) => x.source !== "demo" || st.ui.demo), song] }));
   store.edit((p) => ({ ...p, songId: id, songStart: start, musicVolume: 1 }));
-  // Re-cut the existing reel to the new beat.
-  if (store.get().project.segments.length) generate({ silentAI: true, keepPlan: true });
+  await autoBuild("song");
 }
 
 export async function clipAudioAsMusic(clipId: string) {
@@ -361,7 +399,7 @@ export async function generate(opts: { silentAI?: boolean; keepPlan?: boolean; h
   }
   if (opts.history === false) store.set((st) => ({ ...st, project: next }));
   else store.edit(() => next);
-  store.ui({ selectedSeg: null, selectedText: null, directorNote: note ?? (opts.silentAI ? store.get().ui.directorNote : null) });
+  store.ui({ selectedSeg: null, selectedText: null, arranged: false, directorNote: note ?? (opts.silentAI ? store.get().ui.directorNote : null) });
   engine.seek(0);
 }
 
@@ -380,12 +418,18 @@ export function primeAudio() {
 
 // ---------------------------------------------------------------- segments
 
-export function selectSeg(id: string | null) {
-  store.ui({ selectedSeg: id, selectedText: null, ...(id ? { rightTab: "shot" as const } : {}) });
+export function selectSeg(id: string | null, openShotPanel = true) {
+  store.ui({ selectedSeg: id, selectedText: null, ...(id && openShotPanel ? { rightTab: "shot" as const } : {}) });
+}
+
+/** Hand edits to the shot list: from now on automatic re-cuts keep the order. */
+function arranged() {
+  if (!store.get().ui.arranged) store.ui({ arranged: true });
 }
 
 export function updateSeg(id: string, patch: Partial<Segment>, key?: string) {
   store.edit((p) => ({ ...p, segments: p.segments.map((x) => (x.id === id ? { ...x, ...patch } : x)) }), key);
+  arranged();
 }
 
 export function deleteSeg(id: string) {
@@ -395,6 +439,7 @@ export function deleteSeg(id: string) {
     return { ...p, segments };
   });
   store.ui({ selectedSeg: null });
+  arranged();
 }
 
 export function duplicateSeg(id: string) {
@@ -407,18 +452,87 @@ export function duplicateSeg(id: string) {
     return { ...p, segments };
   });
   store.ui({ selectedSeg: id2 });
+  arranged();
 }
 
+/**
+ * Move a shot's footage to another position. The beat slots stay where they
+ * are (the holds on the intro, the drop and the end belong to the music), so
+ * the pictures swap places and every cut stays on the beat.
+ */
 export function moveSeg(id: string, to: number) {
-  store.edit((p) => {
-    const from = p.segments.findIndex((x) => x.id === id);
-    if (from < 0) return p;
-    const segments = [...p.segments];
-    const [seg] = segments.splice(from, 1);
-    segments.splice(Math.max(0, Math.min(segments.length, to)), 0, seg);
-    if (segments[0].transition !== "cut") segments[0] = { ...segments[0], transition: "cut" };
-    return { ...p, segments };
-  });
+  const s = store.get();
+  const from = s.project.segments.findIndex((x) => x.id === id);
+  if (from < 0 || from === to) return;
+  const segments = moveContent(s.project.segments, from, to, s.clips);
+  store.edit((p) => ({ ...p, segments }));
+  store.ui({ selectedSeg: segments[Math.max(0, Math.min(segments.length - 1, to))].id });
+  arranged();
+}
+
+/** Put a different moment into a shot, keeping the shot's place and length. */
+export function replaceShot(segId: string, clipId: string, momentId: string) {
+  const s = store.get();
+  const seg = s.project.segments.find((x) => x.id === segId);
+  const clip = s.clips.find((c) => c.id === clipId);
+  const m = clip?.analysis?.moments.find((x) => x.id === momentId);
+  if (!seg || !clip || !m) return;
+  const fit = fitMoment(clip, m, seg.duration, 1);
+  updateSeg(segId, { clipId, momentId, srcIn: fit.srcIn, speed: fit.speed, reframe: null, zoom: 1 });
+}
+
+/** The shot the auto-edit is least sure about (lowest-scoring, not hand-picked). */
+function weakestShot(): Segment | null {
+  const s = store.get();
+  let worst: Segment | null = null;
+  let ws = Infinity;
+  for (const seg of s.project.segments) {
+    const m = s.clips.find((c) => c.id === seg.clipId)?.analysis?.moments.find((x) => x.id === seg.momentId);
+    if (!m || m.manual) continue;
+    if (m.score < ws) {
+      ws = m.score;
+      worst = seg;
+    }
+  }
+  return worst;
+}
+
+/**
+ * A moment picked by hand at time t in a clip. It joins the clip's moments
+ * (and every future auto-edit) and goes into the reel straight away, in the
+ * selected shot or else in place of the weakest one.
+ */
+export async function addManualMoment(clipId: string, t: number): Promise<void> {
+  const s = store.get();
+  const clip = s.clips.find((c) => c.id === clipId);
+  if (!clip?.analysis) return;
+  let thumb: string | undefined;
+  let g: FrameGrabber | null = null;
+  try {
+    g = clip.kind === "demo" && clip.demo ? demoGrabber(clip.demo, clip.duration) : await videoGrabber(engine.mediaUrl(clipId) ?? "");
+    thumb = await snapshot(g, t, 240, 0.7);
+  } catch {
+    thumb = clip.thumb;
+  } finally {
+    g?.dispose();
+  }
+  const m: Moment = { id: uid("m"), clipId, t, start: Math.max(0, t - 1.6), end: Math.min(clip.duration, t + 1.6), score: 1, motion: 0.5, thumb, label: "Your pick", manual: true };
+  patchClip(clipId, { analysis: { ...clip.analysis, moments: [...clip.analysis.moments, m].sort((a, b) => a.t - b.t) } });
+  const target = s.project.segments.find((x) => x.id === s.ui.selectedSeg) ?? weakestShot();
+  if (target) {
+    replaceShot(target.id, clipId, m.id);
+    store.ui({ selectedSeg: target.id });
+    toast("Added your pick to the reel");
+  } else if (!s.project.segments.length) {
+    void generate({ silentAI: true });
+  }
+}
+
+/** Take a hand-picked moment back out of the clip's moments. */
+export function removeManualMoment(clipId: string, momentId: string) {
+  const clip = store.get().clips.find((c) => c.id === clipId);
+  if (!clip?.analysis) return;
+  patchClip(clipId, { analysis: { ...clip.analysis, moments: clip.analysis.moments.filter((m) => m.id !== momentId) } });
 }
 
 export function splitAtPlayhead() {
@@ -439,6 +553,7 @@ export function splitAtPlayhead() {
     return { ...pr, segments };
   });
   store.ui({ selectedSeg: id2 });
+  arranged();
 }
 
 /** Lengthen or shorten a shot by whole beats; later shots move with it. */
@@ -484,7 +599,7 @@ export function swapTake(id: string) {
   }
   const clip = s.clips.find((c) => c.id === m.clipId)!;
   const fit = fitMoment(clip, m, seg.duration, seg.speed);
-  updateSeg(id, { clipId: m.clipId, momentId: m.id, srcIn: fit.srcIn, speed: fit.speed, reframe: null });
+  updateSeg(id, { clipId: m.clipId, momentId: m.id, srcIn: fit.srcIn, speed: fit.speed, reframe: null, zoom: 1 });
 }
 
 export function insertMoment(clipId: string, momentId: string) {
@@ -513,6 +628,7 @@ export function insertMoment(clipId: string, momentId: string) {
     return { ...pr, segments };
   });
   store.ui({ selectedSeg: seg.id });
+  arranged();
   engine.seek(segmentStarts(store.get().project.segments)[at] ?? 0);
 }
 

@@ -50,6 +50,8 @@ export interface ExportOptions {
   height: number;
   fps: number;
   bitrate: number;
+  /** false: record without the song, to add it from Instagram's music library instead. */
+  includeMusic: boolean;
   onProgress: (p: number) => void;
   signal: AbortSignal;
 }
@@ -181,6 +183,10 @@ export class Engine {
 
   registerMedia(clipId: string, url: string) {
     this.media.set(clipId, url);
+  }
+
+  mediaUrl(clipId: string): string | undefined {
+    return this.media.get(clipId);
   }
 
   registerSong(id: string, buffer: AudioBuffer) {
@@ -699,6 +705,7 @@ export class Engine {
     this.exporting = true;
     this.loop = false;
     this.setSize(opts.width, opts.height);
+    if (!opts.includeMusic && this.musicVol) this.musicVol.gain.value = 0;
     let wake: { release(): Promise<void> } | null = null;
     try {
       wake = await (navigator as Navigator & { wakeLock?: { request(t: string): Promise<{ release(): Promise<void> }> } }).wakeLock
@@ -720,6 +727,7 @@ export class Engine {
         // ignore
       }
       this.master!.connect(ctx.destination);
+      if (this.musicVol && this.project) this.musicVol.gain.value = this.project.musicVolume;
       this.setSize(pw, ph);
       this.time = 0;
       void wake?.release().catch(() => {});

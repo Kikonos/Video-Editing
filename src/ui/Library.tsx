@@ -106,6 +106,11 @@ function ClipCard({ clip }: { clip: Clip }) {
           )}
         </div>
         <div className="clip-actions">
+          {clip.status === "ready" && (
+            <button className="icon-btn" type="button" title="Pick your own moments in this clip" onClick={() => store.ui({ pickerClip: clip.id })}>
+              <Icon name="star" size={16} />
+            </button>
+          )}
           {clip.kind === "video" && clip.hasAudio && (
             <button className="icon-btn" type="button" title="Use this clip's sound as the music" onClick={() => void clipAudioAsMusic(clip.id)}>
               <Icon name="music" size={16} />
@@ -180,6 +185,10 @@ function Music() {
         }}
       />
       {song && <SongCard song={song} />}
+      <p className="hint">
+        Song on Spotify? Spotify doesn't let apps download its music. Screen-record the song playing (or any video with it), add that here, then export
+        without the song and add the same track in Instagram, starting where the reel's music starts.
+      </p>
       {songs.length > 1 && (
         <>
           <div className="list-head">

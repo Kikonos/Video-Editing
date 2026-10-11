@@ -165,6 +165,8 @@ export function selectMoments(clips: Clip[], n: number, plan?: DirectorPlan | nu
       if (m && picks.length < n) picks.push(m);
     }
   }
+  // Moments picked by hand always make the cut.
+  for (const m of all) if (m.manual && picks.length < n && !picks.includes(m)) picks.push(m);
   const uses = new Map<string, number>();
   const used = new Set(picks.map((m) => m.id));
   for (const m of picks) uses.set(m.clipId, (uses.get(m.clipId) ?? 0) + 1);
@@ -318,6 +320,67 @@ export function autoEdit(clips: Clip[], song: Song | null, base: Project, opts: 
 /** The small serif line that sits in the black space above the picture. */
 export function captionText(text: string, total: number, id = "auto-caption"): TextOverlay {
   return { id, text, start: 0, end: total, style: "caption", anim: "none", place: "above", y: 0.2, size: 0.042, color: "#ffffff" };
+}
+
+type Content = Pick<Segment, "clipId" | "momentId" | "srcIn" | "speed" | "reframe" | "zoom"> & { duration: number };
+
+/** Re-fit a shot's footage to a new length, keeping the same moment centred. */
+export function refit(c: Content, clip: Clip | undefined, duration: number): Pick<Segment, "srcIn" | "speed"> {
+  const dur = clip?.duration ?? Infinity;
+  let speed = c.speed;
+  if (dur < duration * speed) speed = Math.max(0.5, dur / duration);
+  const center = c.srcIn + (c.duration * c.speed) / 2;
+  const need = duration * speed;
+  const srcIn = Math.max(0, Math.min(center - need / 2, Math.max(0, dur - need)));
+  return { srcIn, speed };
+}
+
+/**
+ * Move a shot's footage to another position while the beat slots stay put:
+ * the rhythm (holds on the intro, the drop and the end) belongs to the music,
+ * so only the pictures change places.
+ */
+export function moveContent(segments: Segment[], from: number, to: number, clips: Clip[]): Segment[] {
+  if (from === to || from < 0 || from >= segments.length) return segments;
+  const contents: Content[] = segments.map((s) => ({ clipId: s.clipId, momentId: s.momentId, srcIn: s.srcIn, speed: s.speed, reframe: s.reframe, zoom: s.zoom, duration: s.duration }));
+  const [c] = contents.splice(from, 1);
+  contents.splice(Math.max(0, Math.min(contents.length, to)), 0, c);
+  return segments.map((slot, i) => {
+    const ct = contents[i];
+    const clip = clips.find((x) => x.id === ct.clipId);
+    return { ...slot, clipId: ct.clipId, momentId: ct.momentId, reframe: ct.reframe, zoom: ct.zoom, ...refit(ct, clip, slot.duration) };
+  });
+}
+
+/**
+ * Cut the reel again to (new) music while keeping the order of shots the
+ * viewer arranged. Extra slots are filled with unused moments, extra shots drop off.
+ */
+export function retime(clips: Clip[], song: Song | null, base: Project, opts: AutoEditOptions): Project {
+  const ready = clips.filter((c) => c.status === "ready" && c.analysis && c.analysis.moments.length);
+  if (!ready.length || !base.segments.length) return autoEdit(clips, song, base, opts);
+  const length = opts.length === "auto" ? Math.max(autoLength(ready), Math.round(base.segments.reduce((a, s) => a + s.duration, 0))) : opts.length;
+  const songStart = song ? Math.max(0, Math.min(opts.songStart, Math.max(0, song.duration - 1))) : 0;
+  const usable = song ? Math.min(length, song.duration - songStart) : length;
+  const slots = planSlots(song, songStart, Math.max(2, usable), opts.pace);
+  const used = new Set(base.segments.map((s) => s.momentId));
+  const spare = selectMoments(ready, slots.length + used.size).filter((m) => !used.has(m.id));
+  const segments: Segment[] = slots.map((slot, k) => {
+    const d = slot.end - slot.start;
+    const old = base.segments[k];
+    if (old) {
+      const clip = ready.find((c) => c.id === old.clipId);
+      return { ...old, id: uid("s"), duration: d, transition: k === 0 ? "cut" : old.transition, ...refit(old, clip, d) };
+    }
+    const m = spare[(k - base.segments.length) % Math.max(1, spare.length)] ?? selectMoments(ready, 1)[0];
+    const clip = ready.find((c) => c.id === m.clipId)!;
+    return { id: uid("s"), clipId: clip.id, momentId: m.id, ...fitMoment(clip, m, d, 1), duration: d, transition: "cut", reframe: null, zoom: 1 };
+  });
+  const total = segments.reduce((a, s) => a + s.duration, 0);
+  const texts = base.texts
+    .filter((t) => t.start < total)
+    .map((t) => (t.id.startsWith("auto-") || t.end > total ? { ...t, end: t.id.startsWith("auto-") ? total : Math.min(t.end, total) } : t));
+  return { ...base, songId: song?.id ?? null, songStart, segments, texts };
 }
 
 /** A different good moment to swap into a shot ("Try another take"). */

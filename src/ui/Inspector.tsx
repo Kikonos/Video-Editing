@@ -6,6 +6,8 @@ import {
   duplicateSeg,
   engine,
   generate,
+  importFiles,
+  importMusic,
   nudgeBeats,
   primeAudio,
   setProject,
@@ -23,9 +25,11 @@ import { FRAMES, NEUTRAL_ADJUST, type Adjust, type FrameId, type LookId, type Pa
 import { store, useStore, type RightTab } from "../store.ts";
 import { Field, Segmented, Slider, Toggle } from "./controls.tsx";
 import { Icon } from "./icons.tsx";
+import { ShotsPanel } from "./Shots.tsx";
 
 const TABS: { value: RightTab; label: string }[] = [
-  { value: "auto", label: "Auto edit" },
+  { value: "auto", label: "Make" },
+  { value: "shots", label: "Shots" },
   { value: "shot", label: "Shot" },
   { value: "look", label: "Look" },
   { value: "text", label: "Text" },
@@ -44,6 +48,7 @@ export function Inspector({ only }: { only?: RightTab }) {
       )}
       <div className="panel-body" key={shown}>
         {shown === "auto" && <AutoPanel />}
+        {shown === "shots" && <ShotsPanel />}
         {shown === "shot" && <ShotPanel />}
         {shown === "look" && <LookPanel />}
         {shown === "text" && <TextPanel />}
@@ -75,8 +80,9 @@ function AutoPanel() {
     <div className="stack">
       <div>
         <h2 className="panel-title">Make the reel</h2>
-        <p className="lede">A film-frame montage of your best moments, one shot per beat of the music.</p>
+        <p className="lede">Drop all your videos and add the song. The reel cuts itself on the beat, and you can rearrange it after.</p>
       </div>
+      <QuickStart />
       <Field label="Style">
         <div className="styles">
           {(Object.keys(STYLES) as StyleId[]).map((id) => (
@@ -141,7 +147,7 @@ function AutoPanel() {
               <Icon name="spark" size={14} /> AI Director
             </>
           }
-          hint="Claude looks at your best moments, picks the most atmospheric ones and their order, and writes the caption. Uses your Claude account."
+          hint="Runs by itself once your videos and song are in: Claude looks at your best moments, picks the most atmospheric ones and their order, and writes the caption. Uses your Claude account."
         />
       ) : (
         <p className="hint">
@@ -175,6 +181,99 @@ function AutoPanel() {
       </p>
       {note && <p className="note">{note}</p>}
     </div>
+  );
+}
+
+function QuickStart() {
+  const clips = useStore((s) => s.clips);
+  const demo = useStore((s) => s.ui.demo);
+  const song = useStore((s) => s.songs.find((x) => x.id === s.project.songId) ?? null);
+  const musicBusy = useStore((s) => s.ui.musicBusy);
+  const busy = useStore((s) => s.ui.busy);
+  const segments = useStore((s) => s.project.segments);
+  const videosIn = useRef<HTMLInputElement>(null);
+  const songIn = useRef<HTMLInputElement>(null);
+  const mine = demo ? [] : clips;
+  const scanningN = mine.filter((c) => c.status === "loading" || c.status === "analyzing").length;
+  const readyN = mine.filter((c) => c.status === "ready").length;
+  const failed = mine.filter((c) => c.status === "error").length;
+  const mySong = song && song.source !== "demo" ? song : null;
+  const total = segments.reduce((a, x) => a + x.duration, 0);
+  const videoStatus = !mine.length
+    ? "Select them all at once: as many as you like."
+    : scanningN
+      ? `Finding the best moments: ${readyN} of ${readyN + scanningN} done`
+      : `${readyN} clip${readyN === 1 ? "" : "s"} scanned${failed ? `, ${failed} couldn't be read` : ""}`;
+  const songStatus = musicBusy ?? (mySong ? `${mySong.name} · ${Math.round(mySong.bpm)} BPM` : "From a video with the song in it, or an audio file.");
+  const reelStatus = busy?.label
+    ? busy.label
+    : !demo && segments.length
+      ? `${segments.length} shots · ${total.toFixed(1)}s${mySong ? "" : " · waiting for the song"}`
+      : scanningN
+        ? "Cuts itself as soon as the scan finishes."
+        : "Cuts itself once your videos are in.";
+  return (
+    <ol className="steps">
+      <li className={readyN && !scanningN ? "done" : ""}>
+        <span className="step-n">{readyN && !scanningN ? <Icon name="check" size={13} /> : "1"}</span>
+        <span className="step-text">
+          <strong>Your videos</strong>
+          <small>{videoStatus}</small>
+          {scanningN > 0 && (
+            <span className="bar wide">
+              <span style={{ width: `${Math.round((100 * (readyN + mine.filter((c) => c.status === "analyzing").reduce((a, c) => a + c.progress, 0))) / Math.max(1, mine.length - failed))}%` }} />
+            </span>
+          )}
+        </span>
+        <button className="btn sm" type="button" onClick={() => videosIn.current?.click()}>
+          <Icon name="upload" size={14} /> Add
+        </button>
+        <input
+          ref={videosIn}
+          id="qs-videos"
+          type="file"
+          accept="video/*"
+          multiple
+          hidden
+          onChange={(e) => {
+            if (e.target.files) importFiles(e.target.files);
+            e.target.value = "";
+          }}
+        />
+      </li>
+      <li className={mySong ? "done" : ""}>
+        <span className="step-n">{mySong ? <Icon name="check" size={13} /> : "2"}</span>
+        <span className="step-text">
+          <strong>The song</strong>
+          <small>{songStatus}</small>
+        </span>
+        <button className="btn sm" type="button" disabled={!!musicBusy} onClick={() => songIn.current?.click()}>
+          <Icon name="music" size={14} /> {mySong ? "Change" : "Add"}
+        </button>
+        <input
+          ref={songIn}
+          id="qs-song"
+          type="file"
+          accept="video/*,audio/*"
+          hidden
+          onChange={(e) => {
+            const f = e.target.files?.[0];
+            if (f) {
+              primeAudio();
+              void importMusic(f);
+            }
+            e.target.value = "";
+          }}
+        />
+      </li>
+      <li className={!demo && segments.length && mySong ? "done" : ""}>
+        <span className="step-n">{!demo && segments.length && mySong ? <Icon name="check" size={13} /> : "3"}</span>
+        <span className="step-text">
+          <strong>Your reel</strong>
+          <small>{reelStatus}</small>
+        </span>
+      </li>
+    </ol>
   );
 }
 

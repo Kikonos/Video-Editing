@@ -5,7 +5,8 @@ import { audioContext } from "./audio.ts";
 import { DEMO_H, DEMO_W, drawDemo, makeDemoCanvas } from "./demo.ts";
 import { computeGrade, type Grade } from "./looks.ts";
 import { focusAt } from "./metrics.ts";
-import { Renderer } from "./renderer.ts";
+import type { Compositor } from "./renderer.ts";
+import { createRenderer } from "./renderer2d.ts";
 import { drawTexts } from "./text.ts";
 import {
   layersAt,
@@ -95,7 +96,7 @@ const clamp = (v: number, a: number, b: number) => Math.max(a, Math.min(b, v));
 export class Engine {
   /** The visible output; also what gets recorded on export. */
   readonly canvas: HTMLCanvasElement;
-  private renderer: Renderer;
+  private renderer: Compositor;
   private textCanvas: HTMLCanvasElement;
   private textCtx: CanvasRenderingContext2D;
   private demoCanvases: HTMLCanvasElement[] = [makeDemoCanvas(), makeDemoCanvas()];
@@ -133,9 +134,10 @@ export class Engine {
   private onEnd: (() => void) | null = null;
 
   constructor() {
-    this.canvas = document.createElement("canvas");
-    this.canvas.className = "preview-canvas";
-    this.renderer = new Renderer(this.canvas);
+    const canvas = document.createElement("canvas");
+    canvas.className = "preview-canvas";
+    this.renderer = createRenderer(canvas);
+    this.canvas = this.renderer.canvas;
     this.textCanvas = document.createElement("canvas");
     this.textCtx = this.textCanvas.getContext("2d")!;
     for (let i = 0; i < 4; i++) this.players.push(new Player(() => this.requestRender()));
@@ -630,13 +632,13 @@ export class Engine {
     const frame = this.rawFrame();
     const out: Record<string, string> = {};
     if (!frame || !this.project) return out;
-    const c = document.createElement("canvas");
-    let r: Renderer;
+    let r: Compositor;
     try {
-      r = new Renderer(c);
+      r = createRenderer(document.createElement("canvas"));
     } catch {
       return out;
     }
+    const c = r.canvas;
     r.resize(w, h);
     for (const id of looks) {
       const grade = computeGrade(id, 1, this.project.adjust);
@@ -649,8 +651,7 @@ export class Engine {
       );
       out[id] = c.toDataURL("image/jpeg", 0.8);
     }
-    const lose = (c.getContext("webgl") as WebGLRenderingContext | null)?.getExtension("WEBGL_lose_context");
-    lose?.loseContext();
+    if (r.kind === "webgl") (c.getContext("webgl") as WebGLRenderingContext | null)?.getExtension("WEBGL_lose_context")?.loseContext();
     return out;
   }
 

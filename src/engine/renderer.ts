@@ -123,6 +123,18 @@ void main() {
 
 type Uniforms = Record<string, WebGLUniformLocation | null>;
 
+/** What the engine draws through: the WebGL Renderer, or Renderer2D when WebGL is refused. */
+export interface Compositor {
+  readonly kind: "webgl" | "2d";
+  readonly canvas: HTMLCanvasElement;
+  lost: boolean;
+  resize(w: number, h: number): void;
+  setBand(x: number, y: number, w: number, h: number): void;
+  clear(): void;
+  draw(slot: number, layer: LayerDraw, grade: Grade, time: number): void;
+  overlay(source: TexImageSource): void;
+}
+
 export function cropRect(
   srcW: number,
   srcH: number,
@@ -145,7 +157,8 @@ export function cropRect(
   return [x, y, cw, ch];
 }
 
-export class Renderer {
+export class Renderer implements Compositor {
+  readonly kind = "webgl";
   readonly canvas: HTMLCanvasElement;
   private gl: WebGLRenderingContext;
   private prog: WebGLProgram;

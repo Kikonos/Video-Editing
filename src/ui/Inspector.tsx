@@ -24,6 +24,7 @@ import { formatTime, segmentStarts, TRANSITION_LABEL } from "../engine/timeline.
 import { FRAMES, NEUTRAL_ADJUST, type Adjust, type FrameId, type LookId, type Pace, type StyleId, type TextAnim, type TextPlace, type TextStyle, type TransitionKind } from "../engine/types.ts";
 import { store, useStore, type RightTab } from "../store.ts";
 import { Field, Segmented, Slider, Toggle } from "./controls.tsx";
+import { SongListen } from "./Library.tsx";
 import { Icon } from "./icons.tsx";
 import { ShotsPanel } from "./Shots.tsx";
 
@@ -246,6 +247,7 @@ function QuickStart() {
         <span className="step-text">
           <strong>The song</strong>
           <small>{songStatus}</small>
+          <SongListen />
         </span>
         <button className="btn sm" type="button" disabled={!!musicBusy} onClick={() => songIn.current?.click()}>
           <Icon name="music" size={14} /> {mySong ? "Change" : "Add"}

@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { bestSongStart, importFiles, importMusic, insertMoment, removeClip, removeSong, saveMusic, selectSong, setSongStart, clipAudioAsMusic } from "../actions.ts";
+import { bestSongStart, importFiles, importMusic, insertMoment, listenForSong, primeAudio, removeClip, removeSong, saveMusic, selectSong, setSongStart, clipAudioAsMusic, stopListening } from "../actions.ts";
 import { formatTime, totalDuration } from "../engine/timeline.ts";
 import type { Clip, Song } from "../engine/types.ts";
 import { store, useStore, type LeftTab } from "../store.ts";
@@ -157,6 +157,33 @@ function ClipCard({ clip }: { clip: Clip }) {
   );
 }
 
+/** Offered when the decoder refuses a song file: record it by playing it once. */
+export function SongListen() {
+  const pending = useStore((s) => s.ui.musicListen);
+  const listening = useStore((s) => s.ui.musicListening);
+  if (listening) {
+    return (
+      <div className="listen">
+        <p>Playing the song once to record it. Keep this screen open.</p>
+        <button className="btn sm" type="button" onClick={stopListening}>
+          Stop and use what's recorded
+        </button>
+      </div>
+    );
+  }
+  if (!pending) return null;
+  return (
+    <div className="listen">
+      <p>
+        This browser couldn't read the sound in <strong>{pending.name}</strong> directly. It can record it by playing it once instead (up to 3 minutes).
+      </p>
+      <button className="btn primary sm" type="button" onClick={listenForSong}>
+        <Icon name="wave" size={14} /> Listen to the song
+      </button>
+    </div>
+  );
+}
+
 function Music() {
   const songs = useStore((s) => s.songs);
   const songId = useStore((s) => s.project.songId);
@@ -180,10 +207,12 @@ function Music() {
         hidden
         onChange={(e) => {
           const f = e.target.files?.[0];
+          primeAudio();
           if (f) void importMusic(f);
           e.target.value = "";
         }}
       />
+      <SongListen />
       {song && <SongCard song={song} />}
       <p className="hint">
         Song on Spotify? Spotify doesn't let apps download its music. Screen-record the song playing (or any video with it), add that here, then export

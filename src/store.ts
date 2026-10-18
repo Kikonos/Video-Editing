@@ -39,6 +39,10 @@ export interface UiState {
   pxPerSec: number;
   busy: Busy | null;
   musicBusy: string | null;
+  /** A song file the decoder refused: offer to listen to it once instead. */
+  musicListen: { file: File; name: string; source: "video" | "audio" } | null;
+  /** Recording a song by playing it (see listenForSong). */
+  musicListening: boolean;
   toast: Toast | null;
   exportOpen: boolean;
   auto: AutoSettings;
@@ -74,6 +78,8 @@ const initial: State = {
     pxPerSec: 64,
     busy: null,
     musicBusy: null,
+    musicListen: null,
+    musicListening: false,
     toast: null,
     exportOpen: false,
     auto: { style: "cinema", pace: "beat", length: "auto", order: "story", hook: true, useAI: true },

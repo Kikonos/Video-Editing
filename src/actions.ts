@@ -2,13 +2,13 @@
 
 import { aiErrorMessage, fallbackCaption, runDirector, writeCaption } from "./engine/ai.ts";
 import { analyzeClip, demoGrabber, snapshot, videoGrabber, type FrameGrabber } from "./engine/analyze.ts";
-import { analyzeBeats, decodeAudio, encodeWav, loudnessEnvelope, waveformPeaks } from "./engine/audio.ts";
+import { analyzeBeats, decodeAudio, encodeWav, listenToAudio, loudnessEnvelope, NoSoundTrack, waveformPeaks } from "./engine/audio.ts";
 import { alternativeMoment, autoEdit, autoLength, captionText, fitMoment, moveContent, planSlots, retime, type DirectorPlan } from "./engine/autoedit.ts";
 import { suggestSection } from "./engine/beats.ts";
 import { DEMO_SCENES, synthDemoSong } from "./engine/demo.ts";
 import { Engine } from "./engine/engine.ts";
 import { aiCaps, getClaude, saveBlob } from "./engine/platform.ts";
-import { segmentStarts, timelineBeats, totalDuration } from "./engine/timeline.ts";
+import { formatTime, segmentStarts, timelineBeats, totalDuration } from "./engine/timeline.ts";
 import type { Aspect, Clip, Moment, Project, Segment, Song, TextOverlay } from "./engine/types.ts";
 import { emptyProject, uid } from "./engine/types.ts";
 import { store, toast } from "./store.ts";
@@ -199,18 +199,80 @@ export function importFiles(list: FileList | File[]) {
 
 export async function importMusic(file: File, name = file.name, fromVideo = false) {
   if (store.get().ui.musicBusy) return;
-  store.ui({ musicBusy: fromVideo || file.type.startsWith("video/") ? "Pulling the audio out of the video…" : "Reading the song…", leftTab: "music" });
+  const source = fromVideo || file.type.startsWith("video/") || /\.(mov|mp4|m4v)$/i.test(file.name) ? "video" : "audio";
+  store.ui({ musicBusy: source === "video" ? "Pulling the audio out of the video…" : "Reading the song…", leftTab: "music", musicListen: null });
+  let buffer: AudioBuffer;
   try {
-    const buffer = await decodeAudio(file);
-    if (buffer.duration < 2) throw new Error("short");
+    buffer = await decodeAudio(file);
+  } catch (e) {
+    store.ui({ musicBusy: null });
+    if (e instanceof NoSoundTrack) {
+      toast("That video has no sound track. Pick one with the song playing in it.", "error");
+    } else {
+      store.ui({ musicListen: { file, name, source } });
+      toast("This browser couldn't read the sound straight from that file. Tap “Listen to the song” and it'll record it as it plays.", "error");
+    }
+    return;
+  }
+  await useSongBuffer(buffer, name, source);
+}
+
+async function useSongBuffer(buffer: AudioBuffer, name: string, source: Song["source"]) {
+  try {
+    if (buffer.duration < 2) {
+      toast("That sound is under 2 seconds long. Pick a longer recording.", "error");
+      return;
+    }
     store.ui({ musicBusy: "Finding the beat…" });
-    await addSong(buffer, name, fromVideo || file.type.startsWith("video/") ? "video" : "audio");
+    await addSong(buffer, name, source);
     toast(`Music ready: ${Math.round(currentSong()?.bpm ?? 0)} BPM`);
-  } catch {
-    toast("Couldn't find audio in that file. Try a different video, or an MP3/M4A.", "error");
+  } catch (e) {
+    console.error(e);
+    toast(`Got the sound, but mapping the beat failed: ${(e as Error).message || "unknown error"}`, "error");
   } finally {
     store.ui({ musicBusy: null });
   }
+}
+
+let listening: AbortController | null = null;
+
+/** Record the refused song by playing it once. Call straight from a tap. */
+export function listenForSong() {
+  const pending = store.get().ui.musicListen;
+  if (!pending || store.get().ui.musicBusy) return;
+  listening = new AbortController();
+  store.ui({ musicListen: null, musicListening: true, musicBusy: "Listening to the song…" });
+  const done = () => {
+    listening = null;
+    store.ui({ musicListening: false });
+  };
+  let heard: Promise<AudioBuffer>;
+  try {
+    heard = listenToAudio(
+      pending.file,
+      (t, total) => store.ui({ musicBusy: `Listening to the song… ${formatTime(t, false)} / ${formatTime(total, false)}` }),
+      listening.signal,
+    );
+  } catch (e) {
+    heard = Promise.reject(e);
+  }
+  heard.then(
+    async (buffer) => {
+      done();
+      await useSongBuffer(buffer, pending.name, pending.source);
+    },
+    (e) => {
+      done();
+      console.warn("Listening failed:", e);
+      store.ui({ musicBusy: null });
+      toast("Couldn't hear any sound from that file. Try a different video, or an MP3/M4A.", "error");
+    },
+  );
+}
+
+/** Stop listening early and use what was heard so far. */
+export function stopListening() {
+  listening?.abort();
 }
 
 async function addSong(buffer: AudioBuffer, name: string, source: Song["source"]) {

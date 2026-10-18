@@ -8,6 +8,7 @@ on:
   workflow_dispatch:
 
 permissions:
+  actions: read
   contents: read
   pages: write
   id-token: write
@@ -39,5 +40,20 @@ jobs:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}
     steps:
+      # While Pages is still set to "Deploy from a branch", GitHub also publishes the raw
+      # repository on every push, and whichever deploy finishes last is what's live.
+      # Wait for that one so the built app always lands on top.
+      - name: Wait for GitHub's branch deploy
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          for i in $(seq 1 60); do
+            state=$(gh api "repos/${{ github.repository }}/actions/runs?head_sha=${{ github.sha }}&per_page=50" \
+              --jq '[.workflow_runs[] | select(.name == "pages build and deployment")] | if length == 0 then "none" elif all(.status == "completed") then "done" else "running" end')
+            echo "branch deploy: $state"
+            if [ "$state" = done ]; then break; fi
+            if [ "$state" = none ] && [ "$i" -ge 6 ]; then break; fi
+            sleep 10
+          done
       - id: deployment
         uses: actions/deploy-pages@v4

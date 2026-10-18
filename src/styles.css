@@ -33,6 +33,10 @@ body,
   height: 100%;
 }
 
+html {
+  background: var(--bay);
+}
+
 body {
   margin: 0;
   background: var(--bay);

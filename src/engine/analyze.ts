@@ -1,7 +1,7 @@
 // Scans a clip frame by frame (on tiny thumbnails) and finds its best moments.
 
 import { drawDemo, DEMO_H, DEMO_W, makeDemoCanvas } from "./demo.ts";
-import { focusPoint, frameDiff, histDistance, measureFrame, pickMoments, scoreSamples, type FrameMetrics, type RawSample } from "./metrics.ts";
+import { focusPoint, frameDiff, histDistance, measureFrame, pickMoments, scoreSamples, subjectMotion, type FrameMetrics, type RawSample } from "./metrics.ts";
 import type { ClipAnalysis, DemoScene } from "./types.ts";
 
 export interface FrameGrabber {
@@ -28,28 +28,44 @@ function once(el: HTMLElement, ev: string, timeout: number): Promise<boolean> {
   });
 }
 
-export async function videoGrabber(url: string): Promise<FrameGrabber> {
+/** A video element refused or never finished opening a file. */
+export class VideoOpenError extends Error {
+  constructor(readonly reason: "unsupported" | "decode" | "timeout" | "other") {
+    super(reason === "timeout" ? "The video took too long to open." : "This browser can't play this video.");
+    this.name = "VideoOpenError";
+  }
+}
+
+const withTimeout = <T,>(p: Promise<T>, ms: number, fallback: T) =>
+  Promise.race([p, new Promise<T>((resolve) => setTimeout(() => resolve(fallback), ms))]);
+
+export async function videoGrabber(url: string, timeout = 20000): Promise<FrameGrabber> {
   const v = document.createElement("video");
   v.muted = true;
   v.playsInline = true;
   v.preload = "auto";
   v.setAttribute("playsinline", "");
-  const meta = once(v, "loadeddata", 20000);
+  const meta = once(v, "loadeddata", timeout);
   const failed = new Promise<boolean>((resolve) => v.addEventListener("error", () => resolve(false), { once: true }));
   v.src = url;
   const ok = await Promise.race([meta, failed]);
   if (!ok || !v.videoWidth) {
+    const code = v.error?.code;
     v.removeAttribute("src");
     v.load();
-    throw new Error("This browser can't play this video. Try an MP4 (H.264) export of it.");
+    throw new VideoOpenError(code === 4 ? "unsupported" : code === 3 ? "decode" : !code ? "timeout" : "other");
   }
   // Some browsers only paint seeked frames after the element has played once.
-  try {
-    await v.play();
-    v.pause();
-  } catch {
-    // Autoplay refused; seeking still works in most browsers.
-  }
+  // A phone can leave play() pending forever, so don't wait on it for long.
+  await withTimeout(
+    v.play().then(
+      () => v.pause(),
+      () => undefined,
+    ),
+    3000,
+    undefined,
+  );
+  v.pause();
   return {
     width: v.videoWidth,
     height: v.videoHeight,
@@ -133,7 +149,11 @@ export async function analyzeClip(
   }
 
   const raw: RawSample[] = [];
+  const hists: Float32Array[] = [];
+  /** Samples back to compare against for "the picture changed" (about two seconds). */
+  const back = Math.max(1, Math.round(2 / step));
   let prev: FrameMetrics | null = null;
+  let lastCut = -Infinity;
   const count = Math.max(1, Math.floor(duration / step));
   for (let i = 0; i < count; i++) {
     const t = Math.min(duration - 0.05, (i + 0.5) * step);
@@ -167,13 +187,20 @@ export async function analyzeClip(
       for (let k = a; k <= b; k++) audio = Math.max(audio, loudness[k]);
       if (!Number.isFinite(audio)) audio = null;
     }
+    hists.push(m.hist);
+    if (cut) lastCut = i;
+    const earlier = hists[hists.length - 1 - back];
+    const norm = Math.sqrt(0.5 / step);
     raw.push({
       t,
       mean: m.mean,
       std: m.std,
       sharp: m.sharp,
       color: m.color,
-      motion: diff ? diff.motion * Math.sqrt(0.5 / step) : prev ? 0.02 : 0,
+      motion: diff ? diff.motion * norm : prev ? 0.02 : 0,
+      subject: diff ? subjectMotion(diff.cells) * norm : 0,
+      // A hard cut isn't an event inside a shot.
+      change: earlier && i - lastCut > back ? histDistance(earlier, m.hist) : 0,
       audio,
       faces: faceCount,
       fx: focus.x,
@@ -184,7 +211,10 @@ export async function analyzeClip(
     onProgress((0.85 * (i + 1)) / count);
   }
   // The first sample has no motion reference; borrow its neighbour's.
-  if (raw.length > 1) raw[0].motion = raw[1].motion;
+  if (raw.length > 1) {
+    raw[0].motion = raw[1].motion;
+    raw[0].subject = raw[1].subject;
+  }
   const samples = scoreSamples(raw, duration);
   const moments = pickMoments(samples, duration, clipId);
   for (let i = 0; i < moments.length; i++) {

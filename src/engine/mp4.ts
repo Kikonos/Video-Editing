@@ -14,10 +14,10 @@ export class NoSoundTrack extends Error {
 }
 
 export interface ExtractedAudio {
-  codec: "aac" | "mp3";
+  codec: "aac" | "mp3" | "pcm";
   sampleRate: number;
   channels: number;
-  /** Ready-to-decode files, best first: an .m4a (AAC) or .mp3, then an ADTS .aac stream. */
+  /** Ready-to-decode files, best first: an .m4a (AAC), .mp3 or .wav (PCM), then an ADTS .aac stream. */
   files: Blob[];
 }
 
@@ -87,24 +87,36 @@ async function readMoov(file: Blob): Promise<DataView> {
 
 interface Track {
   timescale: number;
+  /** In timescale units. */
+  duration: number;
   entry: DataView;
   entryType: string;
   stts: Uint8Array;
-  sizes: number[];
-  /** File offset of every sample. */
-  offsets: number[];
+  /** Constant sample size, or 0 when `table` holds per-sample sizes. */
+  fixed: number;
+  table: Uint32Array | null;
+  count: number;
+  /** Every chunk: its file offset and how many samples it holds. */
+  chunks: { off: number; n: number }[];
+  width: number;
+  height: number;
 }
 
-function soundTrack(v: DataView): Track | null {
+function findTrack(v: DataView, handler: "soun" | "vide"): Track | null {
   const moov: Box = { type: "moov", start: 8, end: v.byteLength };
   for (const trak of children(v, moov.start, moov.end).filter((b) => b.type === "trak")) {
     const mdia = child(v, trak, "mdia");
     const hdlr = mdia && child(v, mdia, "hdlr");
-    if (!mdia || !hdlr || fourcc(v, hdlr.start + 8) !== "soun") continue;
+    if (!mdia || !hdlr || fourcc(v, hdlr.start + 8) !== handler) continue;
     const mdhd = child(v, mdia, "mdhd");
     const stbl = path(v, mdia, "minf", "stbl");
     if (!mdhd || !stbl) continue;
-    const timescale = v.getUint8(mdhd.start) === 1 ? v.getUint32(mdhd.start + 20) : v.getUint32(mdhd.start + 12);
+    const v1 = v.getUint8(mdhd.start) === 1;
+    const timescale = v1 ? v.getUint32(mdhd.start + 20) : v.getUint32(mdhd.start + 12);
+    const duration = v1 ? Number(v.getBigUint64(mdhd.start + 24)) : v.getUint32(mdhd.start + 16);
+    const tkhd = child(v, trak, "tkhd");
+    const width = tkhd ? v.getUint32(tkhd.end - 8) / 65536 : 0;
+    const height = tkhd ? v.getUint32(tkhd.end - 4) / 65536 : 0;
 
     const stsd = child(v, stbl, "stsd");
     const stts = child(v, stbl, "stts");
@@ -121,8 +133,11 @@ function soundTrack(v: DataView): Track | null {
 
     const fixed = v.getUint32(stsz.start + 4);
     const count = v.getUint32(stsz.start + 8);
-    const sizes: number[] = new Array(count);
-    for (let i = 0; i < count; i++) sizes[i] = fixed || v.getUint32(stsz.start + 12 + i * 4);
+    let table: Uint32Array | null = null;
+    if (!fixed) {
+      table = new Uint32Array(count);
+      for (let i = 0; i < count; i++) table[i] = v.getUint32(stsz.start + 12 + i * 4);
+    }
 
     const wide = stco.type === "co64";
     const nChunks = v.getUint32(stco.start + 4);
@@ -132,30 +147,56 @@ function soundTrack(v: DataView): Track | null {
       first: v.getUint32(stsc.start + 8 + i * 12) - 1,
       per: v.getUint32(stsc.start + 12 + i * 12),
     }));
-    const offsets: number[] = [];
+    const chunks: { off: number; n: number }[] = [];
     let s = 0;
     for (let r = 0; r < runs.length && s < count; r++) {
       const last = r + 1 < runs.length ? runs[r + 1].first : nChunks;
       for (let c = runs[r].first; c < last && s < count; c++) {
-        let o = chunkOff(c);
-        for (let k = 0; k < runs[r].per && s < count; k++, s++) {
-          offsets.push(o);
-          o += sizes[s];
-        }
+        const n = Math.min(runs[r].per, count - s);
+        chunks.push({ off: chunkOff(c), n });
+        s += n;
       }
     }
-    if (offsets.length < count) sizes.length = offsets.length;
-    return { timescale, entry, entryType, stts: new Uint8Array(v.buffer, v.byteOffset + stts.start, stts.end - stts.start), sizes, offsets };
+    return {
+      timescale,
+      duration,
+      entry,
+      entryType,
+      stts: new Uint8Array(v.buffer, v.byteOffset + stts.start, stts.end - stts.start),
+      fixed,
+      table,
+      count: s,
+      chunks,
+      width,
+      height,
+    };
   }
   return null;
 }
 
-/** Finds the esds box inside a sample entry (QuickTime nests it in a 'wave' box). */
-function findEsds(entry: DataView): Uint8Array | null {
-  for (let o = 8; o + 8 <= entry.byteLength; o++) {
-    if (fourcc(entry, o + 4) !== "esds") continue;
+/** File offset and size of every sample (compressed audio: one AAC/MP3 frame each). */
+function sampleLayout(t: Track): { offsets: number[]; sizes: number[] } {
+  const offsets: number[] = [];
+  const sizes: number[] = [];
+  let i = 0;
+  for (const c of t.chunks) {
+    let o = c.off;
+    for (let k = 0; k < c.n; k++, i++) {
+      const size = t.fixed || t.table![i];
+      offsets.push(o);
+      sizes.push(size);
+      o += size;
+    }
+  }
+  return { offsets, sizes };
+}
+
+/** Finds a box by type anywhere inside a sample entry (QuickTime nests some in a 'wave' box). */
+function findIn(entry: DataView, type: string, from = 8): Uint8Array | null {
+  for (let o = from; o + 8 <= entry.byteLength; o++) {
+    if (fourcc(entry, o + 4) !== type) continue;
     const size = entry.getUint32(o);
-    if (size >= 12 && o + size <= entry.byteLength) return new Uint8Array(entry.buffer, entry.byteOffset + o, size);
+    if (size >= 8 && o + size <= entry.byteLength) return new Uint8Array(entry.buffer, entry.byteOffset + o, size);
   }
   return null;
 }
@@ -215,7 +256,7 @@ function parseAsc(asc: Uint8Array) {
 }
 
 /** Reads every sample, merging nearby ranges so a file with tiny chunks still takes few reads. */
-async function readSamples(file: Blob, offsets: number[], sizes: number[]): Promise<Uint8Array[]> {
+async function readRanges(file: Blob, offsets: number[], sizes: number[]): Promise<Uint8Array[]> {
   const order = offsets.map((_, i) => i).sort((a, b) => offsets[a] - offsets[b]);
   const out: Uint8Array[] = new Array(offsets.length);
   let i = 0;
@@ -350,24 +391,151 @@ function buildAdts(asc: ReturnType<typeof parseAsc>, samples: Uint8Array[]): Blo
   return new Blob(parts as BlobPart[], { type: "audio/aac" });
 }
 
+// ------------------------------------------------------------------ PCM
+
+interface PcmFormat {
+  channels: number;
+  rate: number;
+  bits: number;
+  float: boolean;
+  bigEndian: boolean;
+  /** 8-bit QuickTime 'raw ' is unsigned. */
+  unsigned: boolean;
+}
+
+const PCM_TYPES = new Set(["sowt", "twos", "raw ", "in24", "in32", "fl32", "fl64", "lpcm", "ipcm"]);
+
+/** Uncompressed sound (Canon and most other cameras record this in .MOV). */
+function pcmFormat(t: Track): PcmFormat | null {
+  if (!PCM_TYPES.has(t.entryType)) return null;
+  const e = t.entry;
+  const version = e.getUint16(16);
+  const enda = findIn(e, "enda", 36);
+  const little = enda ? new DataView(enda.buffer, enda.byteOffset + 8, 2).getUint16(0) === 1 : false;
+  if (version === 2) {
+    const flags = e.getUint32(60);
+    return {
+      channels: e.getUint32(48),
+      rate: e.getFloat64(40),
+      bits: e.getUint32(56),
+      float: (flags & 1) !== 0,
+      bigEndian: (flags & 2) !== 0,
+      unsigned: (flags & 4) === 0 && e.getUint32(56) === 8,
+    };
+  }
+  const channels = e.getUint16(24);
+  const rate = e.getUint32(32) / 65536;
+  const type = t.entryType;
+  const bits = type === "in24" ? 24 : type === "in32" || type === "fl32" ? 32 : type === "fl64" ? 64 : e.getUint16(26);
+  return {
+    channels,
+    rate,
+    bits,
+    float: type === "fl32" || type === "fl64",
+    bigEndian: type === "sowt" ? false : !little,
+    unsigned: type === "raw ",
+  };
+}
+
+function wav16(frames: Int16Array, channels: number, rate: number): Blob {
+  const h = new DataView(new ArrayBuffer(44));
+  const str = (o: number, x: string) => [...x].forEach((c, i) => h.setUint8(o + i, c.charCodeAt(0)));
+  str(0, "RIFF");
+  h.setUint32(4, 36 + frames.byteLength, true);
+  str(8, "WAVE");
+  str(12, "fmt ");
+  h.setUint32(16, 16, true);
+  h.setUint16(20, 1, true);
+  h.setUint16(22, channels, true);
+  h.setUint32(24, rate, true);
+  h.setUint32(28, rate * channels * 2, true);
+  h.setUint16(32, channels * 2, true);
+  h.setUint16(34, 16, true);
+  str(36, "data");
+  h.setUint32(40, frames.byteLength, true);
+  return new Blob([h.buffer, frames.buffer as ArrayBuffer], { type: "audio/wav" });
+}
+
+/** Reads PCM chunk by chunk into a 16-bit WAV, averaging down to at most `maxRate`. */
+async function readPcm(file: Blob, t: Track, f: PcmFormat, maxRate: number): Promise<Blob> {
+  const bytesPer = f.bits / 8;
+  const frameBytes = bytesPer * f.channels;
+  if (!frameBytes || !f.channels || !f.rate) throw new Error("Unreadable sound format.");
+  // Old-style tables count frames with a nominal size of 1 byte.
+  const sizes: number[] = [];
+  let i = 0;
+  for (const c of t.chunks) {
+    let n = 0;
+    for (let k = 0; k < c.n; k++, i++) n += t.fixed === 1 ? frameBytes : t.fixed || t.table![i];
+    sizes.push(n);
+  }
+  const totalFrames = Math.floor(sizes.reduce((a, b) => a + b, 0) / frameBytes);
+  const step = Math.max(1, Math.floor(f.rate / maxRate));
+  const outCh = Math.min(2, f.channels);
+  const out = new Int16Array(Math.ceil(totalFrames / step) * outCh);
+  const acc = new Float64Array(outCh);
+  let inStep = 0;
+  let w = 0;
+  const parts = await readRanges(file, t.chunks.map((c) => c.off), sizes);
+  for (const part of parts) {
+    const dv = new DataView(part.buffer, part.byteOffset, part.byteLength);
+    const le = !f.bigEndian;
+    const n = Math.floor(part.byteLength / frameBytes);
+    for (let fr = 0; fr < n; fr++) {
+      for (let ch = 0; ch < outCh; ch++) {
+        const o = fr * frameBytes + ch * bytesPer;
+        let x: number;
+        if (f.float) x = f.bits === 64 ? dv.getFloat64(o, le) : dv.getFloat32(o, le);
+        else if (f.bits === 16) x = dv.getInt16(o, le) / 32768;
+        else if (f.bits === 24) {
+          const b0 = dv.getUint8(o);
+          const b1 = dv.getUint8(o + 1);
+          const b2 = dv.getUint8(o + 2);
+          const v = le ? b0 | (b1 << 8) | (b2 << 16) : b2 | (b1 << 8) | (b0 << 16);
+          x = ((v << 8) >> 8) / 8388608;
+        } else if (f.bits === 32) x = dv.getInt32(o, le) / 2147483648;
+        else x = f.unsigned ? (dv.getUint8(o) - 128) / 128 : dv.getInt8(o) / 128;
+        acc[ch] += x;
+      }
+      if (++inStep === step) {
+        for (let ch = 0; ch < outCh; ch++) {
+          out[w++] = Math.max(-32768, Math.min(32767, Math.round((acc[ch] / step) * 32767)));
+          acc[ch] = 0;
+        }
+        inStep = 0;
+      }
+    }
+  }
+  return wav16(out.subarray(0, w), outCh, Math.round(f.rate / step));
+}
+
 /**
  * The sound track of an MP4/MOV as decodable files. Throws NoSoundTrack when
  * the movie has none, and a plain Error for codecs it can't repackage.
+ * `maxRate` caps the sample rate of uncompressed sound (scanning only needs
+ * loudness, and a minute of camera PCM is 11 MB at full rate).
  */
-export async function extractAudio(file: Blob): Promise<ExtractedAudio> {
+export async function extractAudio(file: Blob, opts: { maxRate?: number } = {}): Promise<ExtractedAudio> {
   const moov = await readMoov(file);
-  const t = soundTrack(moov);
-  if (!t) throw new NoSoundTrack();
-  if (!t.sizes.length) throw new NoSoundTrack();
-  const esdsBox = findEsds(t.entry);
+  const t = findTrack(moov, "soun");
+  if (!t || !t.count) throw new NoSoundTrack();
+
+  const pcm = pcmFormat(t);
+  if (pcm) {
+    const wav = await readPcm(file, t, pcm, opts.maxRate ?? 192000);
+    return { codec: "pcm", sampleRate: pcm.rate, channels: pcm.channels, files: [wav] };
+  }
+
+  const esdsBox = findIn(t.entry, "esds");
   const esds = esdsBox && parseEsds(esdsBox);
-  const samples = await readSamples(file, t.offsets, t.sizes);
+  const { offsets, sizes } = sampleLayout(t);
+  const samples = await readRanges(file, offsets, sizes);
 
   if (t.entryType === ".mp3" || (esds && (esds.oti === 0x6b || esds.oti === 0x69))) {
     return { codec: "mp3", sampleRate: 0, channels: 0, files: [new Blob(samples as BlobPart[], { type: "audio/mpeg" })] };
   }
   if (!esds || !esds.asc || ![0x40, 0x66, 0x67, 0x68].includes(esds.oti)) {
-    throw new Error(`Unsupported sound format (${t.entryType}).`);
+    throw new Error(`Unsupported sound format (${t.entryType.trim()}).`);
   }
   const asc = parseAsc(esds.asc);
   const channels = asc.channels || 2;
@@ -375,4 +543,63 @@ export async function extractAudio(file: Blob): Promise<ExtractedAudio> {
   const adts = buildAdts(asc, samples);
   if (adts) files.push(adts);
   return { codec: "aac", sampleRate: asc.rate, channels, files };
+}
+
+// ---------------------------------------------------------------- video
+
+export interface VideoInfo {
+  /** "H.264", "HEVC", "ProRes", ... or the raw four-letter code. */
+  codec: string;
+  width: number;
+  height: number;
+  fps: number;
+  chroma: "4:2:0" | "4:2:2" | "4:4:4" | null;
+  bitDepth: number | null;
+  /** False when iPhones and Macs can't decode this in a browser. Null when unknown. */
+  playable: boolean | null;
+  /** e.g. "4K HEVC 10-bit 4:2:2, 50 fps" */
+  summary: string;
+}
+
+const CODECS: Record<string, string> = {
+  avc1: "H.264", avc3: "H.264", hvc1: "HEVC", hev1: "HEVC", dvh1: "HEVC (Dolby Vision)", dvhe: "HEVC (Dolby Vision)",
+  apch: "ProRes", apcn: "ProRes", apcs: "ProRes", apco: "ProRes", ap4h: "ProRes 4444", ap4x: "ProRes 4444 XQ",
+  mp4v: "MPEG-4", mjpa: "Motion JPEG", mjpb: "Motion JPEG", jpeg: "Motion JPEG", av01: "AV1", vp09: "VP9",
+  "xd5c": "XDCAM HD", "dvhp": "DVCPRO HD", "dvc ": "DV", "dvcp": "DV",
+};
+
+/** What the picture is encoded as, read from the container (for explaining why a clip won't open). */
+export async function videoInfo(file: Blob): Promise<VideoInfo | null> {
+  if (!(await isMp4Family(file))) return null;
+  const moov = await readMoov(file);
+  const t = findTrack(moov, "vide");
+  if (!t) return null;
+  const e = t.entry;
+  const codec = CODECS[t.entryType] ?? t.entryType.trim();
+  const width = t.width || e.getUint16(32);
+  const height = t.height || e.getUint16(34);
+  const fps = t.duration ? Math.round((t.count / (t.duration / t.timescale)) * 100) / 100 : 0;
+  let chroma: VideoInfo["chroma"] = null;
+  let bitDepth: number | null = null;
+  let playable: boolean | null = null;
+  const avcC = findIn(e, "avcC", 86);
+  const hvcC = findIn(e, "hvcC", 86);
+  if (avcC && avcC.length > 9) {
+    const profile = avcC[9];
+    chroma = profile === 122 ? "4:2:2" : profile === 244 || profile === 44 ? "4:4:4" : "4:2:0";
+    bitDepth = profile === 110 || profile === 122 || profile === 244 ? 10 : 8;
+    // Apple's hardware decodes 8-bit 4:2:0 H.264 only.
+    playable = profile !== 110 && profile !== 122 && profile !== 244 && profile !== 44;
+  } else if (hvcC && hvcC.length > 25) {
+    const c = hvcC[8 + 16] & 3;
+    chroma = c === 2 ? "4:2:2" : c === 3 ? "4:4:4" : "4:2:0";
+    bitDepth = (hvcC[8 + 17] & 7) + 8;
+    playable = c <= 1 && bitDepth <= 10;
+  } else if (codec === "Motion JPEG" || codec.startsWith("DV") || codec.startsWith("XDCAM")) {
+    playable = false;
+  }
+  const res = Math.max(width, height) >= 3800 ? "4K " : Math.min(width, height) >= 1070 ? "1080p " : Math.min(width, height) >= 700 ? "720p " : "";
+  const detail = [bitDepth && bitDepth > 8 ? `${bitDepth}-bit` : "", chroma && chroma !== "4:2:0" ? chroma : ""].filter(Boolean).join(" ");
+  const summary = `${res}${codec}${detail ? " " + detail : ""}${fps ? `, ${Math.round(fps)} fps` : ""}`;
+  return { codec, width, height, fps, chroma, bitDepth, playable, summary };
 }

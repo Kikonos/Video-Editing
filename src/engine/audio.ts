@@ -3,7 +3,7 @@
 
 import { decimate, detectBeats, downmix, type BeatAnalysis } from "./beats.ts";
 import BeatWorker from "./beat.worker.ts?worker&inline";
-import { extractAudio, isMp4Family, NoSoundTrack } from "./mp4audio.ts";
+import { extractAudio, isMp4Family, NoSoundTrack } from "./mp4.ts";
 
 export { NoSoundTrack };
 
@@ -35,32 +35,51 @@ export class CantDecode extends Error {
   }
 }
 
-async function decodeBytes(file: Blob): Promise<AudioBuffer> {
+async function decodeBytes(file: Blob, ctx: BaseAudioContext): Promise<AudioBuffer> {
   const data = await file.arrayBuffer();
-  const ctx = audioContext();
   return await new Promise<AudioBuffer>((resolve, reject) => {
     const p = ctx.decodeAudioData(data, resolve, (e) => reject(e ?? new Error("decode failed")));
     if (p && typeof p.then === "function") p.then(resolve, reject);
   });
 }
 
+/** Clip scans only need loudness: 8 kHz keeps a long clip's sound to a few MB. */
+const SCAN_RATE = 8000;
+let scanCtx: BaseAudioContext | null = null;
+
+function scanContext(): BaseAudioContext {
+  if (!scanCtx) {
+    try {
+      const Ctor = window.OfflineAudioContext || (window as unknown as { webkitOfflineAudioContext: typeof OfflineAudioContext }).webkitOfflineAudioContext;
+      scanCtx = new Ctor(1, 1, SCAN_RATE);
+    } catch {
+      scanCtx = audioContext();
+    }
+  }
+  return scanCtx;
+}
+
 /** Whole files above this aren't handed to the decoder in one piece (phones run out of memory). */
 const WHOLE_FILE_LIMIT = 400 * 1024 * 1024;
+const WHOLE_FILE_LIMIT_SCAN = 60 * 1024 * 1024;
 
 /**
  * Decode the sound of a video or audio file. MP4 and QuickTime videos have
  * their sound track pulled out first (Safari can't decode a .mov, and it
  * avoids loading the picture). Throws NoSoundTrack when there is no sound,
- * CantDecode when the browser can't read it.
+ * CantDecode when the browser can't read it. `scan` decodes at a low rate
+ * for loudness only and never loads a whole video.
  */
-export async function decodeAudio(file: Blob): Promise<AudioBuffer> {
+export async function decodeAudio(file: Blob, opts: { scan?: boolean } = {}): Promise<AudioBuffer> {
+  const ctx = opts.scan ? scanContext() : audioContext();
   let last: unknown = null;
-  if (await isMp4Family(file)) {
+  const mp4 = await isMp4Family(file);
+  if (mp4) {
     try {
-      const ex = await extractAudio(file);
+      const ex = await extractAudio(file, { maxRate: opts.scan ? SCAN_RATE : undefined });
       for (const f of ex.files) {
         try {
-          return await decodeBytes(f);
+          return await decodeBytes(f, ctx);
         } catch (e) {
           last = e;
         }
@@ -70,9 +89,10 @@ export async function decodeAudio(file: Blob): Promise<AudioBuffer> {
       last = e;
     }
   }
-  if (file.size <= WHOLE_FILE_LIMIT) {
+  const limit = opts.scan ? (mp4 ? 0 : WHOLE_FILE_LIMIT_SCAN) : WHOLE_FILE_LIMIT;
+  if (file.size <= limit) {
     try {
-      return await decodeBytes(file);
+      return await decodeBytes(file, ctx);
     } catch (e) {
       last = e;
     }

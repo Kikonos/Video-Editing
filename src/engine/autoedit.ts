@@ -23,6 +23,8 @@ export interface AutoEditOptions {
   hook: boolean;
   songStart: number;
   plan?: DirectorPlan | null;
+  /** False: no colour filter, every video keeps its own colours. */
+  filters?: boolean;
 }
 
 export function autoLength(clips: Clip[]): number {
@@ -304,9 +306,7 @@ export function autoEdit(clips: Clip[], song: Song | null, base: Project, opts: 
   return {
     ...base,
     frame: def.frame,
-    look: def.look,
-    lookAmount: def.lookAmount,
-    adjust: { ...NEUTRAL_ADJUST, ...def.adjust },
+    ...styleGrade(opts.style, opts.filters !== false),
     beatPulse: 0,
     songId: song?.id ?? null,
     songStart,
@@ -315,6 +315,13 @@ export function autoEdit(clips: Clip[], song: Song | null, base: Project, opts: 
     caption: opts.plan?.caption ?? base.caption,
     hashtags: opts.plan?.hashtags ?? base.hashtags,
   };
+}
+
+/** The colour treatment a style gives the reel, or none at all. */
+export function styleGrade(style: StyleId, filters: boolean): Pick<Project, "look" | "lookAmount" | "adjust"> {
+  if (!filters) return { look: "natural", lookAmount: 1, adjust: { ...NEUTRAL_ADJUST } };
+  const def = STYLES[style];
+  return { look: def.look, lookAmount: def.lookAmount, adjust: { ...NEUTRAL_ADJUST, ...def.adjust } };
 }
 
 /** The small serif line that sits in the black space above the picture. */

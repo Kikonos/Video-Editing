@@ -1,15 +1,16 @@
 // Everything the UI can ask for. Keeps React components thin.
 
 import { aiErrorMessage, fallbackCaption, runDirector, writeCaption } from "./engine/ai.ts";
-import { analyzeClip, demoGrabber, snapshot, videoGrabber, type FrameGrabber } from "./engine/analyze.ts";
+import { analyzeClip, demoGrabber, snapshot, VideoOpenError, videoGrabber, type FrameGrabber } from "./engine/analyze.ts";
+import { videoInfo } from "./engine/mp4.ts";
 import { analyzeBeats, decodeAudio, encodeWav, listenToAudio, loudnessEnvelope, NoSoundTrack, waveformPeaks } from "./engine/audio.ts";
-import { alternativeMoment, autoEdit, autoLength, captionText, fitMoment, moveContent, planSlots, retime, type DirectorPlan } from "./engine/autoedit.ts";
+import { alternativeMoment, autoEdit, autoLength, captionText, fitMoment, moveContent, planSlots, retime, styleGrade, type DirectorPlan } from "./engine/autoedit.ts";
 import { suggestSection } from "./engine/beats.ts";
 import { DEMO_SCENES, synthDemoSong } from "./engine/demo.ts";
 import { Engine } from "./engine/engine.ts";
 import { aiCaps, getClaude, saveBlob } from "./engine/platform.ts";
 import { formatTime, segmentStarts, timelineBeats, totalDuration } from "./engine/timeline.ts";
-import type { Aspect, Clip, Moment, Project, Segment, Song, TextOverlay } from "./engine/types.ts";
+import type { Aspect, Clip, LookId, Moment, Project, Segment, Song, TextOverlay } from "./engine/types.ts";
 import { emptyProject, uid } from "./engine/types.ts";
 import { store, toast } from "./store.ts";
 
@@ -46,23 +47,46 @@ function currentSong(): Song | null {
 
 // ------------------------------------------------------------------ import
 
-const queue: { id: string; grab: () => Promise<FrameGrabber>; file?: File }[] = [];
+interface ScanJob {
+  id: string;
+  grab: (timeout: number) => Promise<FrameGrabber>;
+  file?: File;
+  /** Second attempt, made alone once the rest of the batch is done. */
+  retry?: boolean;
+}
+
+const queue: ScanJob[] = [];
+const retries: ScanJob[] = [];
 let active = 0;
-/** Clips are scanned two at a time: enough to keep the decoder busy without starving playback. */
-const PARALLEL = 2;
+/** Phones open one video at a time: two at once can starve the decoder and fail both. */
+const PARALLEL = typeof window !== "undefined" && window.matchMedia?.("(pointer: coarse)").matches ? 1 : 2;
 let newSinceBuild = 0;
 
-async function scan(job: (typeof queue)[number]) {
+const within = <T,>(p: Promise<T>, ms: number): Promise<T> =>
+  Promise.race([p, new Promise<T>((_, reject) => setTimeout(() => reject(new Error("timed out")), ms))]);
+
+/** Why a clip won't open, in words someone can act on. */
+async function openFailure(file: File | undefined, e: unknown): Promise<string> {
+  const info = file ? await videoInfo(file).catch(() => null) : null;
+  const what = info ? ` (${info.summary})` : "";
+  if (info?.playable === false) {
+    return `Recorded as ${info.summary}, which browsers can't play. Set the camera to 8-bit 4:2:0 H.264 or HEVC (often labelled "IPB" or "Standard"), or convert this clip first.`;
+  }
+  if (e instanceof VideoOpenError && e.reason === "timeout") return `This video took too long to open${what}. Close other apps and tap Retry.`;
+  return `This browser couldn't open this video${what}. Tap Retry, or export it as an MP4 (H.264) first.`;
+}
+
+async function scan(job: ScanJob) {
   let g: FrameGrabber | null = null;
   try {
-    g = await job.grab();
+    g = await job.grab(job.retry ? 60000 : 20000);
     const thumb = await snapshot(g, Math.min(1.2, g.duration * 0.25), 320);
     patchClip(job.id, { width: g.width, height: g.height, duration: g.duration, thumb, status: "analyzing", progress: 0 });
     let loud: Float32Array | null = null;
     let hasAudio = false;
-    if (job.file && job.file.size < 250 * 1024 * 1024) {
+    if (job.file) {
       try {
-        const buf = await decodeAudio(job.file);
+        const buf = await within(decodeAudio(job.file, { scan: true }), 30000);
         loud = loudnessEnvelope(buf);
         hasAudio = buf.duration > 0.5;
       } catch {
@@ -78,22 +102,57 @@ async function scan(job: (typeof queue)[number]) {
     });
     patchClip(job.id, { analysis, status: "ready", progress: 1, hasAudio });
   } catch (e) {
-    patchClip(job.id, { status: "error", error: (e as Error).message || "Couldn't read this video." });
+    console.warn(`Scan failed for clip ${job.id}:`, e);
+    const info = job.file && e instanceof VideoOpenError ? await videoInfo(job.file).catch(() => null) : null;
+    if (e instanceof VideoOpenError && !job.retry && info?.playable !== false) {
+      // Often the phone was just busy: try again on its own after the batch.
+      retries.push({ ...job, retry: true });
+      patchClip(job.id, { status: "loading", progress: 0 });
+    } else {
+      patchClip(job.id, { status: "error", error: e instanceof VideoOpenError ? await openFailure(job.file, e) : (e as Error).message || "Couldn't read this video." });
+    }
   } finally {
     g?.dispose();
   }
 }
 
 function runQueue() {
-  while (active < PARALLEL && queue.length) {
+  // Retries go one at a time, after everything else.
+  const limit = queue.length ? PARALLEL : 1;
+  if (!queue.length && !active && retries.length) queue.push(retries.shift()!);
+  while (active < limit && queue.length) {
     const job = queue.shift()!;
     active++;
     void scan(job).finally(() => {
       active--;
-      if (queue.length) runQueue();
+      if (queue.length || retries.length) runQueue();
       else if (active === 0) void autoBuild("clips");
     });
   }
+}
+
+/** Colour filter on or off for the whole reel (and every re-cut after). */
+export function setFilters(on: boolean) {
+  const auto = store.get().ui.auto;
+  store.ui({ auto: { ...auto, filters: on } });
+  store.edit((p) => ({ ...p, ...styleGrade(auto.style, on) }), "filters");
+}
+
+/** Picking a look by hand: Natural means no filter, anything else turns filters back on. */
+export function chooseLook(look: LookId) {
+  const auto = store.get().ui.auto;
+  if ((look !== "natural") !== auto.filters) store.ui({ auto: { ...auto, filters: look !== "natural" } });
+  setProject({ look, ...(look === "natural" ? { lookAmount: 1 } : {}) });
+}
+
+/** Scan a clip that failed to open again. */
+export function retryClip(id: string) {
+  const file = files.get(id);
+  const url = engine.mediaUrl(id);
+  if (!file || !url) return;
+  patchClip(id, { status: "loading", progress: 0, error: undefined });
+  queue.push({ id, grab: (timeout) => videoGrabber(url, timeout), file, retry: true });
+  runQueue();
 }
 
 /** Clips still being opened or scanned. */
@@ -108,7 +167,12 @@ export function scanning(): number {
  */
 async function autoBuild(reason: "clips" | "song") {
   const s = store.get();
-  if (scanning() > 0 || s.ui.busy) return;
+  if (scanning() > 0) return;
+  if (s.ui.busy) {
+    // Something else is running (Claude, an export): build once it's done instead of skipping.
+    setTimeout(() => void autoBuild(reason), 1500);
+    return;
+  }
   const ready = s.clips.filter((c) => c.status === "ready" && c.analysis?.moments.length);
   if (!ready.length) return;
   const song = currentSong();
@@ -172,7 +236,7 @@ export function importFiles(list: FileList | File[]) {
     const url = URL.createObjectURL(f);
     files.set(id, f);
     engine.registerMedia(id, url);
-    queue.push({ id, grab: () => videoGrabber(url), file: f });
+    queue.push({ id, grab: (timeout) => videoGrabber(url, timeout), file: f });
     return {
       id,
       name: f.name,

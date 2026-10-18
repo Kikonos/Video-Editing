@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { bestSongStart, importFiles, importMusic, insertMoment, listenForSong, primeAudio, removeClip, removeSong, saveMusic, selectSong, setSongStart, clipAudioAsMusic, stopListening } from "../actions.ts";
+import { bestSongStart, importFiles, importMusic, insertMoment, listenForSong, primeAudio, removeClip, removeSong, retryClip, saveMusic, selectSong, setSongStart, clipAudioAsMusic, stopListening } from "../actions.ts";
 import { formatTime, totalDuration } from "../engine/timeline.ts";
 import type { Clip, Song } from "../engine/types.ts";
 import { store, useStore, type LeftTab } from "../store.ts";
@@ -95,7 +95,16 @@ function ClipCard({ clip }: { clip: Clip }) {
               <small>{clip.status === "loading" ? "Opening…" : "Finding best moments…"}</small>
             </span>
           )}
-          {clip.status === "error" && <small className="err">{clip.error}</small>}
+          {clip.status === "error" && (
+            <>
+              <small className="err">{clip.error}</small>
+              {clip.kind === "video" && (
+                <button className="link" type="button" onClick={() => retryClip(clip.id)}>
+                  Retry
+                </button>
+              )}
+            </>
+          )}
           {clip.status === "ready" && (
             <span className="clip-status">
               <Meter value={clip.analysis?.quality ?? 0} />

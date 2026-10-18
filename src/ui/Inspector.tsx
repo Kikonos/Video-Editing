@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import {
   addText,
+  chooseLook,
   deleteSeg,
   deleteText,
   duplicateSeg,
@@ -10,6 +11,7 @@ import {
   importMusic,
   nudgeBeats,
   primeAudio,
+  setFilters,
   setProject,
   splitAtPlayhead,
   stopDirector,
@@ -101,6 +103,12 @@ function AutoPanel() {
           ))}
         </div>
       </Field>
+      <Toggle
+        checked={auto.filters}
+        onChange={setFilters}
+        label="Colour filter"
+        hint={auto.filters ? "The style's colour grade on every video." : "Off: every video keeps its own colours."}
+      />
       <Field label="Pace">
         <Segmented<Pace>
           label="Pace"
@@ -487,6 +495,7 @@ const ADJ: { key: keyof Adjust; label: string; min: number; max: number }[] = [
 
 function LookPanel() {
   const look = useStore((s) => s.project.look);
+  const filters = useStore((s) => s.ui.auto.filters);
   const amount = useStore((s) => s.project.lookAmount);
   const adjust = useStore((s) => s.project.adjust);
   const frame = useStore((s) => s.project.frame);
@@ -517,9 +526,10 @@ function LookPanel() {
           }))}
         />
       </Field>
+      <Toggle checked={filters} onChange={setFilters} label="Colour filter on all videos" hint={filters ? "Pick a look below, or turn this off to keep the original colours." : "Off: every video keeps its own colours."} />
       <div className="looks">
         {(Object.keys(LOOKS) as LookId[]).map((id) => (
-          <button key={id} type="button" className={`look ${look === id ? "on" : ""}`} aria-pressed={look === id} onClick={() => setProject({ look: id })}>
+          <button key={id} type="button" className={`look ${look === id ? "on" : ""}`} aria-pressed={look === id} onClick={() => chooseLook(id)}>
             <span className="look-img" style={{ aspectRatio: String(ratio) }}>
               {thumbs[id] ? <img src={thumbs[id]} alt="" /> : <span className={`look-fallback lk-${id}`} />}
             </span>

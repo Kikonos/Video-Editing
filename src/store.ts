@@ -12,6 +12,8 @@ export interface AutoSettings {
   order: "story" | "energy";
   hook: boolean;
   useAI: boolean;
+  /** Colour filter from the style. Off keeps every video's own colours. */
+  filters: boolean;
 }
 
 export interface Busy {
@@ -82,7 +84,7 @@ const initial: State = {
     musicListening: false,
     toast: null,
     exportOpen: false,
-    auto: { style: "cinema", pace: "beat", length: "auto", order: "story", hook: true, useAI: true },
+    auto: { style: "cinema", pace: "beat", length: "auto", order: "story", hook: true, useAI: true, filters: true },
     ai: { available: false, images: false, checked: false },
     directorNote: null,
     demo: false,

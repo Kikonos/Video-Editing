@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { openAsBlob } from "node:fs";
-import { extractAudio, isMp4Family, NoSoundTrack } from "../src/engine/mp4audio.ts";
+import { extractAudio, isMp4Family, NoSoundTrack, videoInfo } from "../src/engine/mp4.ts";
 
 // Fixtures made with ffmpeg: 3 s stereo AAC tones in a QuickTime .mov (esds
 // nested in a 'wave' box, as iPhones write) and in a faststart .mp4, a .mp4
@@ -55,4 +55,47 @@ test("passes MP3 sound through as an .mp3 stream", async () => {
 
 test("says when a video has no sound track", async () => {
   await assert.rejects(extractAudio(await fixture("silent.mov")), NoSoundTrack);
+});
+
+// Cameras (Canon and most others) record uncompressed sound in .MOV.
+for (const [name, channels] of [["pcm-sowt.mov", 2], ["pcm-twos.mov", 2], ["pcm-s24.mov", 1]] as const) {
+  test(`reads camera PCM sound from ${name} as a WAV`, async () => {
+    const r = await extractAudio(await fixture(name));
+    assert.equal(r.codec, "pcm");
+    assert.equal(r.channels, channels);
+    const wav = new DataView(await r.files[0].arrayBuffer());
+    assert.equal(String.fromCharCode(wav.getUint8(8), wav.getUint8(9), wav.getUint8(10), wav.getUint8(11)), "WAVE");
+    assert.equal(wav.getUint16(22, true), channels);
+    assert.equal(wav.getUint32(24, true), 8000);
+    // One second of a 440 Hz tone: it crosses zero about 880 times.
+    let crossings = 0;
+    for (let o = 44 + channels * 2; o < wav.byteLength; o += channels * 2) {
+      if ((wav.getInt16(o - channels * 2, true) < 0) !== (wav.getInt16(o, true) < 0)) crossings++;
+    }
+    assert.ok(crossings > 860 && crossings < 900, `${crossings} zero crossings`);
+  });
+}
+
+test("reads PCM at a lower rate for scanning", async () => {
+  const r = await extractAudio(await fixture("pcm-sowt.mov"), { maxRate: 1000 });
+  const wav = new DataView(await r.files[0].arrayBuffer());
+  assert.equal(wav.getUint32(24, true), 1000);
+  assert.equal(wav.getUint32(40, true), 1000 * 2 * 2);
+});
+
+test("tells which videos iPhones can't play", async () => {
+  const ok = await videoInfo(await fixture("pcm-sowt.mov"));
+  assert.equal(ok?.codec, "H.264");
+  assert.equal(ok?.playable, true);
+  const h264pro = await videoInfo(await fixture("h264-422-10.mov"));
+  assert.equal(h264pro?.chroma, "4:2:2");
+  assert.equal(h264pro?.playable, false);
+  const hevc422 = await videoInfo(await fixture("hevc-422-10.mov"));
+  assert.equal(hevc422?.codec, "HEVC");
+  assert.equal(hevc422?.bitDepth, 10);
+  assert.equal(hevc422?.chroma, "4:2:2");
+  assert.equal(hevc422?.playable, false);
+  assert.match(hevc422!.summary, /HEVC 10-bit 4:2:2, 25 fps/);
+  const hevc420 = await videoInfo(await fixture("hevc-420-10.mov"));
+  assert.equal(hevc420?.playable, true);
 });

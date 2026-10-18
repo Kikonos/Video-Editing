@@ -139,12 +139,29 @@ export interface RawSample {
   std: number;
   sharp: number;
   color: number;
+  /** Overall frame change since the previous sample (camera moves count too). */
   motion: number;
+  /** Movement concentrated in part of the frame: someone or something moving, not the camera. */
+  subject?: number;
+  /** How different the picture looks from about two seconds earlier (0..1). */
+  change?: number;
   audio: number | null;
   faces: number;
   fx: number;
   fy: number;
   cut: boolean;
+}
+
+/**
+ * Movement concentrated in part of the frame. A camera pan moves every cell
+ * about equally; a person jumping moves a few cells a lot.
+ */
+export function subjectMotion(cells: Float32Array): number {
+  const s = [...cells].sort((a, b) => a - b);
+  const median = s[s.length >> 1];
+  const top = s.slice(Math.floor(s.length * 0.8));
+  const topMean = top.reduce((a, v) => a + v, 0) / Math.max(1, top.length);
+  return Math.max(0, topMean - median);
 }
 
 const clamp01 = (v: number) => Math.max(0, Math.min(1, v));
@@ -157,19 +174,33 @@ function robustRange(values: number[]): [number, number] {
   return [lo, Math.max(lo + 1e-6, hi)];
 }
 
+function median(values: number[]): number {
+  if (!values.length) return 0;
+  const s = [...values].sort((a, b) => a - b);
+  return s[s.length >> 1];
+}
+
 /**
- * Turn raw measurements into a 0..1 "would this look good in a reel" score.
- * Half of each feature is absolute (so a sharp clip beats a blurry one) and
- * half is relative to the clip (so every clip still has its own highlights).
+ * Turn raw measurements into a 0..1 "worth a shot in the reel" score.
+ *
+ * What counts is that something happens: a subject moving (not the camera),
+ * the scene changing, a burst of sound (laughing, cheering, a splash), faces.
+ * How good the frame looks (sharp, well exposed, colourful) scales that, so
+ * a beautiful frame where nothing happens scores low, and a blurry or black
+ * one can't win on action alone.
  */
 export function scoreSamples(raw: RawSample[], duration: number): FrameSample[] {
   if (!raw.length) return [];
   const [mLo, mHi] = robustRange(raw.map((r) => r.motion));
+  const [uLo, uHi] = robustRange(raw.map((r) => r.subject ?? 0));
   const [sLo, sHi] = robustRange(raw.map((r) => r.sharp));
   const [cLo, cHi] = robustRange(raw.map((r) => r.color));
-  const audios = raw.map((r) => r.audio).filter((v): v is number => v !== null);
-  const [aLo, aHi] = robustRange(audios);
-  const out: FrameSample[] = raw.map((r) => {
+  const mSpread = clamp01((mHi - mLo) / 0.03);
+  const uSpread = clamp01((uHi - uLo) / 0.025);
+  // Sound events are measured against the clip's own level around that moment.
+  const step = raw.length > 1 ? Math.max(0.05, (raw[raw.length - 1].t - raw[0].t) / (raw.length - 1)) : 1;
+  const win = Math.max(2, Math.round(5 / step));
+  const out: FrameSample[] = raw.map((r, i) => {
     const sharpAbs = 1 - Math.exp(-r.sharp / 0.045);
     const sharpRel = clamp01((r.sharp - sLo) / (sHi - sLo));
     const sharp = 0.5 * sharpAbs + 0.5 * sharpRel;
@@ -177,21 +208,41 @@ export function scoreSamples(raw: RawSample[], duration: number): FrameSample[] 
     const colorRel = clamp01((r.color - cLo) / (cHi - cLo));
     const color = 0.6 * colorAbs + 0.4 * colorRel;
     const exposure = clamp01(1 - Math.pow(Math.abs(r.mean - 0.47) / 0.42, 1.6)) * clamp01(r.std / 0.12);
+
+    // The "compared with the rest of this clip" halves only count as far as the
+    // clip has real ups and downs; otherwise a steady wobble reads as peaks.
     const mAbs = r.motion / (r.motion + 0.035);
-    const mRel = clamp01((r.motion - mLo) / (mHi - mLo));
-    const motion = 0.5 * mAbs + 0.5 * mRel;
-    const audio = r.audio === null ? 0.5 : clamp01((r.audio - aLo) / (aHi - aLo));
-    // Fast movement only counts when the frame is still crisp; otherwise it is shake.
-    const shake = mAbs > 0.6 && sharpAbs < 0.35 ? 0.15 : 0;
-    let score =
-      0.27 * sharp + 0.17 * exposure + 0.18 * color + 0.2 * motion + 0.12 * audio + 0.06 * clamp01(r.std / 0.25) - shake;
-    if (r.faces > 0) score += 0.08 + 0.04 * Math.min(2, r.faces - 1);
-    // Camera start/stop wobble at the very edges of a clip.
+    const motion = 0.5 * mAbs + 0.5 * mSpread * clamp01((r.motion - mLo) / (mHi - mLo));
+    // A little handheld wobble isn't anything happening.
+    const sub = Math.max(0, (r.subject ?? 0) - 0.006);
+    const subject = 0.5 * (sub / (sub + 0.02)) + 0.5 * uSpread * clamp01(((r.subject ?? 0) - uLo) / (uHi - uLo));
+    const change = clamp01((r.change ?? 0) / 0.25);
+    let audioEvent = 0;
+    let audio = 0.5;
+    if (r.audio !== null) {
+      const around: number[] = [];
+      for (let k = Math.max(0, i - win); k <= Math.min(raw.length - 1, i + win); k++) {
+        const a = raw[k].audio;
+        if (a !== null) around.push(a);
+      }
+      // Ignore the ordinary rise and fall of background sound (under 3 dB).
+      audioEvent = clamp01((r.audio - median(around) - 3) / 9);
+      audio = audioEvent;
+    }
+    // Fast movement only counts when the frame is still crisp; otherwise it's shake.
+    const shaky = mAbs > 0.6 && sharpAbs < 0.35;
+    const interest = clamp01(
+      (shaky ? 0.15 : 0.45) * subject + (shaky ? 0 : 0.15) * motion + 0.2 * change + 0.4 * audioEvent + (r.faces > 0 ? 0.3 + 0.05 * Math.min(2, r.faces - 1) : 0),
+    );
+    const looks = clamp01(0.45 * sharp + 0.35 * exposure + 0.2 * color);
+    let score = Math.pow(looks, 0.7) * (0.12 + 0.88 * interest);
+    // The first and last second: the camera is still settling or about to stop.
     const edge = Math.min(r.t, duration - r.t);
-    if (edge < 0.4) score *= 0.75 + 0.25 * (edge / 0.4);
+    if (edge < 1) score *= 0.7 + 0.3 * edge;
     return {
       t: r.t,
       score: clamp01(score),
+      interest,
       sharp,
       motion,
       color,
@@ -214,28 +265,55 @@ export function scoreSamples(raw: RawSample[], duration: number): FrameSample[] 
   return out;
 }
 
-/** Peaks of the smoothed score, at least `gap` seconds apart, kept inside one scene. */
+/** How many moments a clip may offer: grows slowly with length (a 10 s clip 2, a minute 6, never more than 8). */
+export function momentBudget(duration: number): number {
+  return Math.max(1, Math.min(8, Math.round(1.6 * Math.sqrt(Math.max(0, duration) / 5))));
+}
+
+/**
+ * The clip's standout moments: peaks of the smoothed score that rise clearly
+ * above what's around them. A clip where nothing much happens gives one
+ * moment (its best), not a dozen ordinary ones.
+ */
 export function pickMoments(samples: FrameSample[], duration: number, clipId: string): Moment[] {
   if (!samples.length) return [];
-  const smooth = samples.map((_, i) => {
-    let acc = 0;
-    let w = 0;
-    for (let k = -2; k <= 2; k++) {
-      const v = samples[i + k];
-      if (!v) continue;
-      const wk = 1 - Math.abs(k) / 3;
-      acc += v.score * wk;
-      w += wk;
-    }
-    return acc / w;
-  });
-  // Montages cut on every beat, so they need many distinct moments per clip.
-  const maxMoments = Math.max(1, Math.min(30, Math.round(duration / 1.6)));
-  const gap = Math.max(1.2, Math.min(3, duration / 14));
-  const order = smooth.map((v, i) => [v, i] as const).sort((a, b) => b[0] - a[0]);
+  const smoothed = (get: (x: FrameSample) => number) =>
+    samples.map((_, i) => {
+      let acc = 0;
+      let w = 0;
+      for (let k = -2; k <= 2; k++) {
+        const v = samples[i + k];
+        if (!v) continue;
+        const wk = 1 - Math.abs(k) / 3;
+        acc += get(v) * wk;
+        w += wk;
+      }
+      return acc / w;
+    });
+  const smooth = smoothed((x) => x.score);
+  const activity = smoothed((x) => x.interest ?? 1);
+  const budget = momentBudget(duration);
+  const gap = Math.max(2, duration / (budget * 1.6));
+  const best = Math.max(...smooth);
+  const typical = median(smooth);
+  const bar = typical + 0.35 * (best - typical);
+  const within = (i: number, radius: number) => samples.map((_, j) => j).filter((j) => Math.abs(samples[j].t - samples[i].t) <= radius);
+  const candidates: number[] = [];
+  for (let i = 0; i < samples.length; i++) {
+    const near = within(i, gap / 2);
+    if (near.some((j) => smooth[j] > smooth[i])) continue;
+    const isBest = smooth[i] === best;
+    // Prominence: how far the peak rises above the lower ground on either side.
+    const left = within(i, gap * 1.5).filter((j) => j <= i).map((j) => smooth[j]);
+    const right = within(i, gap * 1.5).filter((j) => j >= i).map((j) => smooth[j]);
+    const prominence = smooth[i] - Math.max(Math.min(...left), Math.min(...right));
+    // Beyond the clip's best, a moment needs something actually happening in it.
+    if (isBest || (smooth[i] >= bar && smooth[i] >= 0.5 * best && prominence >= 0.03 && activity[i] >= 0.2)) candidates.push(i);
+  }
+  candidates.sort((a, b) => smooth[b] - smooth[a]);
   const picked: number[] = [];
-  for (const [, i] of order) {
-    if (picked.length >= maxMoments) break;
+  for (const i of candidates) {
+    if (picked.length >= budget) break;
     if (picked.some((j) => Math.abs(samples[j].t - samples[i].t) < gap)) continue;
     picked.push(i);
   }

@@ -155,3 +155,12 @@ test("hand-picked moments always make the cut", () => {
   const p = autoEdit(clips, s, emptyProject(), { style: "cinema", pace: "beat", length: 15, order: "story", hook: true, songStart: s.downbeats[2] });
   assert.ok(p.segments.some((x) => x.momentId === "mine"), "the low-scoring hand pick is in the reel");
 });
+
+test("colour filter off keeps every video's own colours", () => {
+  const clips = [fakeClip("a", 20, 5, 1), fakeClip("b", 20, 9, 2)];
+  const on = autoEdit(clips, null, emptyProject(), { style: "cinema", pace: "beat", length: 10, order: "story", hook: true, songStart: 0 });
+  assert.equal(on.look, "cinema");
+  const off = autoEdit(clips, null, emptyProject(), { style: "cinema", pace: "beat", length: 10, order: "story", hook: true, songStart: 0, filters: false });
+  assert.equal(off.look, "natural");
+  assert.ok(Object.values(off.adjust).every((v) => v === 0), "no adjustments");
+});

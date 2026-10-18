@@ -14,6 +14,8 @@ export const ASPECTS: Record<Aspect, { w: number; h: number; label: string }> = 
 export interface FrameSample {
   t: number;
   score: number;
+  /** How much is happening (movement, change, sound, faces), 0..1. */
+  interest?: number;
   sharp: number;
   motion: number;
   color: number;

@@ -24,7 +24,7 @@ Three styles package these rules:
 
 ## How you use it
 
-1. **Add videos:** select all your clips at once on the Make tab (or drop them anywhere). They're scanned two at a time for their best moments.
+1. **Add videos:** select all your clips at once on the Make tab (or drop them anywhere). They're scanned for their best moments (one at a time on a phone, two at a time on a computer). A clip that fails to open is retried once on its own, and if it still won't open, it says why.
 2. **Add the song:** from any video that has it, or an audio file. You can add it while the clips are still scanning.
 3. **The reel cuts itself** as soon as both are in. If Claude is available (inside the Claude artifact), the AI Director picks and orders the shots and writes the caption in the same pass.
 
@@ -43,7 +43,8 @@ Spotify doesn't let apps download or extract its music, so there's no Spotify im
 
 ## What else it does
 
-- **Finds your best moments** on your device: sharpness, exposure, colour, movement, faces where the browser supports it, and loud moments in the clip's own sound.
+- **Finds the moments where something happens**, on your device: someone or something moving (camera shake and pans don't count), the scene changing, a burst of sound such as laughing, cheering or a splash, and faces where the browser can detect them. How good the frame looks (sharp, well exposed, colourful) scales that, so a pretty shot where nothing happens scores low. Long clips offer a handful of standout moments (about 2 for a 10 s clip, 6 for a minute, never more than 8), and a clip where nothing stands out offers just its best one.
+- **Colour filter switch:** each style comes with a colour grade. Turn off *Colour filter* (Make tab or Look panel) to keep every video's own colours, including on every re-cut.
 - **Pulls music from any video or audio file:** tempo, every beat, bar lines, and the strongest part of the song for your reel's length. Drag to pick another part, or save the extracted audio.
 - **AI Director (when opened as a Claude artifact).** Claude looks at a contact sheet of your best moments, favours atmospheric shots (wide views, golden hour, silhouettes, friends in the moment), orders them, and writes the POV line and an understated caption.
 - **Keeps the subject in the frame:** the crop follows the subject, and you can drag on the preview to reframe a shot.
@@ -89,7 +90,7 @@ Everything runs in the browser. Your videos never leave your device; the only ne
 ## Limits
 
 - Export records the reel in real time, so a 30 s reel takes about 30 s. Keep the tab in front while it records.
-- Video formats are whatever your browser can play. iPhone HEVC (.mov) footage plays in Safari and in Chrome on Mac and Windows with hardware support; if a clip shows "can't play this video", export it as MP4 (H.264) first.
+- Video formats are whatever your browser can play. iPhone HEVC (.mov) and camera H.264 (.mov/.mp4, with AAC or uncompressed PCM sound) play in Safari and Chrome. Pro camera modes recorded as 10-bit 4:2:2 (H.264 or HEVC) can't be played by browsers; the clip says so, and setting the camera to 8-bit 4:2:0 (often labelled IPB or Standard) fixes it.
 - Chrome, Edge and Safari export MP4. Firefox exports WebM, which Instagram may refuse.
 - Vertical phone footage in a 16:9 frame keeps only a horizontal slice of the picture. The crop leans toward the middle, where people usually are; filming some clips horizontally, or picking the 4:3 or square frame, keeps more of the shot.
-- Clips larger than 250 MB are analysed without their sound (to keep memory in check); the picture analysis is unaffected.
+- Clip sound is read straight from the file at a low rate for scanning, so long clips don't use much memory. Formats the app can't unpack itself (other than MP4/MOV) are only decoded whole when under 60 MB; above that, the clip is scanned without its sound.

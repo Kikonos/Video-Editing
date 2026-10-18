@@ -4,6 +4,14 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
     <title>Reel Room</title>
+    <meta name="theme-color" content="#0f1014" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+    <meta name="apple-mobile-web-app-title" content="Reel Room" />
+    <link rel="icon" type="image/svg+xml" href="./icon.svg" />
+    <link rel="apple-touch-icon" href="./apple-touch-icon.png" />
+    <link rel="manifest" href="./manifest.webmanifest" />
     <meta name="description" content="Turn your camera roll into beat-synced Instagram Reels. Finds your best moments, pulls music from any video and cuts on the beat." />
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
@@ -52,15 +60,22 @@
           b.onclick = function () { location.reload(); };
           boot.appendChild(b);
         }
-        window.addEventListener("error", function (e) {
-          show("Reel Room couldn't start in this browser.", (e && e.message) || "Unknown error");
-        });
+        // Capture phase also sees a <script> that fails to download, which never reaches window otherwise.
+        window.addEventListener(
+          "error",
+          function (e) {
+            var el = e && e.target;
+            if (el && el.tagName === "SCRIPT") show("Reel Room couldn't load its app files.", "Couldn't download " + (el.src || "a script") + ". Check your connection and reload.");
+            else if (el === window || !el || !el.tagName) show("Reel Room couldn't start in this browser.", (e && e.message) || "Unknown error");
+          },
+          true,
+        );
         setTimeout(function () {
-          show("Reel Room is taking a long time to load.", "Check your connection and reload. If you opened it from your home screen, try the same link in Safari.");
+          show("Reel Room is taking a long time to load.", "Check your connection and tap Reload.");
         }, 20000);
       })();
     </script>
     <!-- /boot -->
-    <script type="module" src="/src/main.tsx"></script>
+    <script type="module" src="./src/main.tsx"></script>
   </body>
 </html>

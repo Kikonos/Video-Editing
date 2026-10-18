@@ -66,6 +66,12 @@ npm run build:artifact   # single-file page in artifact/reel-room.html
 
 The app opens with a sample reel made from built-in, procedurally drawn clips and a synthesised track, so you can try every feature before importing anything. "Start with my videos" clears it.
 
+## On your iPhone
+
+Every push to `main` builds the app and publishes it to GitHub Pages (`.github/workflows/pages.yml`) at **https://kikonos.github.io/Video-Editing/**. It needs one setting, once: Settings → Pages → Build and deployment → Source: **GitHub Actions**.
+
+Open that link in Safari, tap Share → **Add to Home Screen**. It opens full screen with its own icon. When you save a reel, the share sheet comes up: tap **Save Video** and it goes to Photos, ready for Instagram. Outside the Claude artifact the AI Director isn't available, so titles and captions come from the built-in suggestions.
+
 ## How it works
 
 Everything runs in the browser. Your videos never leave your device; the only network calls are Google Fonts and, if you turn on the AI Director inside Claude, one request that sends a contact sheet of small thumbnails.

@@ -1,0 +1,16 @@
+{
+  "name": "Reel Room",
+  "short_name": "Reel Room",
+  "description": "Dump your clips, add a song, get a beat-synced film-frame reel.",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "orientation": "portrait",
+  "background_color": "#0f1014",
+  "theme_color": "#0f1014",
+  "icons": [
+    { "src": "icon-192.png", "sizes": "192x192", "type": "image/png" },
+    { "src": "icon-512.png", "sizes": "512x512", "type": "image/png" },
+    { "src": "icon.svg", "sizes": "any", "type": "image/svg+xml" }
+  ]
+}

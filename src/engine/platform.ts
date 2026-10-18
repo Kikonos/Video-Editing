@@ -31,8 +31,34 @@ interface DownloadsApi {
 
 const SAVE_EXT = new Set(["mp4", "webm", "png", "jpg", "jpeg", "txt", "json", "zip"]);
 
+const SHARE_TYPES: Record<string, string> = { mp4: "video/mp4", webm: "video/webm", jpg: "image/jpeg", png: "image/png", wav: "audio/wav" };
+
+/**
+ * On phones, hand the file to the share sheet: on an iPhone that offers
+ * "Save Video" straight into Photos, where Instagram picks it up. A download
+ * would land in Files instead. Null when sharing isn't possible.
+ */
+async function shareFile(filename: string, blob: Blob): Promise<SaveResult | null> {
+  const nav = navigator as Navigator & { canShare?: (d: ShareData) => boolean };
+  if (typeof nav.share !== "function" || typeof nav.canShare !== "function") return null;
+  if (!window.matchMedia("(pointer: coarse)").matches) return null;
+  const type = SHARE_TYPES[filename.split(".").pop()?.toLowerCase() ?? ""] ?? blob.type;
+  const file = new File([blob], filename, { type });
+  if (!nav.canShare({ files: [file] })) return null;
+  try {
+    await nav.share({ files: [file] });
+    return { status: "saved" };
+  } catch (e) {
+    if ((e as DOMException)?.name === "AbortError") return { status: "declined" };
+    // NotAllowedError (the tap was too long ago) and the like: fall back to a download.
+    return null;
+  }
+}
+
 export async function saveBlob(filename: string, blob: Blob): Promise<SaveResult> {
   if (!inArtifact) {
+    const shared = await shareFile(filename, blob);
+    if (shared) return shared;
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a");
     a.href = url;

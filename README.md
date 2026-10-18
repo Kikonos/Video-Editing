@@ -12,15 +12,16 @@ The editing rules come from measuring reference reels frame by frame against the
 - **A cut on every beat.** The reference reels cut every 0.34–0.53 s, within 0.05 s of the beat. Shots hold for two beats on the opening, on the drop, and at the end. On the same music, the planner reproduces 86% of the real cut points of the main reference reel.
 - **Hard cuts.** The only extras are a punch-in (the same take continues, cut in tighter on the beat) and a single motion-blur and white-flash bridge into the drop.
 - **Film grades.** *Cinema* has teal shadows, golden highlights, deep blacks and grain. *Summer film* is faded and warm, like a road-trip home video. *Postcard* is clean, rich holiday colour. *Dusk*, *Mono* and *Natural* are there too.
-- **A small serif "POV: …" line** in the black space above the picture, for the whole reel (Road trip style).
 
 Three styles package these rules:
 
-| Style | Frame | Pace | Look | Text |
-| --- | --- | --- | --- | --- |
-| Cinema (default) | 16:9 | every beat, punch-ins, one blur flash | Cinema | none |
-| Road trip | 4:3 | relaxed: 1 to 4 beats following the phrases | Summer film | POV caption |
-| Holiday | 1:1 | every beat, punch-ins | Postcard | none |
+| Style | Frame | Pace | Look |
+| --- | --- | --- | --- |
+| Cinema (default) | 16:9 | every beat, punch-ins, one blur flash | Cinema |
+| Road trip | 4:3 | relaxed: 1 to 4 beats following the phrases | Summer film |
+| Holiday | 1:1 | every beat, punch-ins | Postcard |
+
+There's no text on the video: the reels are pictures and music only.
 
 ## How you use it
 
@@ -46,10 +47,10 @@ Spotify doesn't let apps download or extract its music, so there's no Spotify im
 - **Finds the moments where something happens**, on your device: someone or something moving (camera shake and pans don't count), the scene changing, a burst of sound such as laughing, cheering or a splash, and faces where the browser can detect them. How good the frame looks (sharp, well exposed, colourful) scales that, so a pretty shot where nothing happens scores low. Long clips offer a handful of standout moments (about 2 for a 10 s clip, 6 for a minute, never more than 8), and a clip where nothing stands out offers just its best one.
 - **Colour filter switch:** each style comes with a colour grade. Turn off *Colour filter* (Make tab or Look panel) to keep every video's own colours, including on every re-cut.
 - **Pulls music from any video or audio file:** tempo, every beat, bar lines, and the strongest part of the song for your reel's length. Drag to pick another part, or save the extracted audio.
-- **AI Director (when opened as a Claude artifact).** Claude looks at a contact sheet of your best moments, favours atmospheric shots (wide views, golden hour, silhouettes, friends in the moment), orders them, and writes the POV line and an understated caption.
+- **AI Director (when opened as a Claude artifact).** Claude looks at a contact sheet of your best moments, favours atmospheric shots (wide views, golden hour, silhouettes, friends in the moment), orders them, and writes an understated Instagram caption.
 - **Keeps the subject in the frame:** the crop follows the subject, and you can drag on the preview to reframe a shot.
 - **Editing:** a timeline with a beat ruler; drag to reorder, drag a shot's edge to change its length (it snaps to beats); split, duplicate, delete, undo/redo; per-shot source window, speed, transition, framing and zoom; "try another moment".
-- **Text:** caption, editorial, headline and handwritten styles, placed above the picture, below it, or on it.
+- **Full-screen preview:** the corner-bracket button plays the reel on its own, filling the screen. Tap to pause or play, ✕ to close.
 - **Sound:** music volume, original clip sound and a fade-out.
 - **Export:** MP4 at 1080×1920 (or 720p), with or without the song, a cover image and a caption ready to copy.
 
@@ -81,15 +82,18 @@ Everything runs in the browser. Your videos never leave your device; the only ne
 | --- | --- |
 | Beat tracking: spectral-flux onsets, tempo by autocorrelation, dynamic-programming beat tracker, downbeat phase, energy per beat, best-section finder | `src/engine/beats.ts` |
 | Frame scoring, moment picking, subject tracking for reframing | `src/engine/metrics.ts`, `src/engine/analyze.ts` |
-| Auto edit: beat grid to shot slots (holds on the intro, drop and end), moment selection and ordering, punch-ins, POV caption | `src/engine/autoedit.ts` |
+| Auto edit: beat grid to shot slots (holds on the intro, drop and end), moment selection and ordering, punch-ins | `src/engine/autoedit.ts` |
 | WebGL compositor: film-frame band, crop and reframe, colour grade, transitions | `src/engine/renderer.ts` |
-| Playback and export: video pool synced to the audio clock, MediaRecorder export | `src/engine/engine.ts` |
+| MP4/MOV reading: sound track extraction (AAC, MP3, camera PCM), picture samples for decoding, format checks | `src/engine/mp4.ts` |
+| Frame-accurate decoding of each shot with WebCodecs, ahead of the playhead | `src/engine/decoder.ts` |
+| Playback and export: decoded shots (or a <video> pool for other formats) on the audio clock, waiting for a shot rather than freezing; MediaRecorder export that pauses while a shot decodes | `src/engine/engine.ts` |
 | Claude AI Director and captions | `src/engine/ai.ts` |
 | UI (React) | `src/ui/`, `src/App.tsx`, `src/actions.ts`, `src/store.ts` |
 
 ## Limits
 
-- Export records the reel in real time, so a 30 s reel takes about 30 s. Keep the tab in front while it records.
+- Export records the reel in real time, so a 30 s reel takes about 30 s, a little longer if it has to wait for a shot to decode. Keep the screen on and the app in front while it records.
+- Videos kept in iCloud download to your phone when you pick them, before the app sees them. For big batches, download them first (in Photos, or with Settings → Photos → Download and Keep Originals).
 - Video formats are whatever your browser can play. iPhone HEVC (.mov) and camera H.264 (.mov/.mp4, with AAC or uncompressed PCM sound) play in Safari and Chrome. Pro camera modes recorded as 10-bit 4:2:2 (H.264 or HEVC) can't be played by browsers; the clip says so, and setting the camera to 8-bit 4:2:0 (often labelled IPB or Standard) fixes it.
 - Chrome, Edge and Safari export MP4. Firefox exports WebM, which Instagram may refuse.
 - Vertical phone footage in a 16:9 frame keeps only a horizontal slice of the picture. The crop leans toward the middle, where people usually are; filming some clips horizontally, or picking the 4:3 or square frame, keeps more of the shot.

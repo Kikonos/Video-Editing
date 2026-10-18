@@ -1,10 +1,8 @@
 // "AI Director": shows Claude a numbered contact sheet of the best candidate
-// shots and gets back a running order, shot labels, an on-screen title and an
-// Instagram caption. Falls back to on-device choices when Claude isn't there.
+// shots and gets back a running order, shot labels and an Instagram caption. Falls back to on-device choices when Claude isn't there.
 
 import type { DirectorPlan } from "./autoedit.ts";
 import type { SampleFn } from "./platform.ts";
-import { STYLES } from "./looks.ts";
 import type { Clip, Moment, StyleId } from "./types.ts";
 
 const TILE = 256;
@@ -68,13 +66,12 @@ export async function contactSheet(moments: Moment[]): Promise<Blob> {
 
 const STYLE_WORDS: Record<StyleId, string> = {
   cinema: "cinematic travel montage: widescreen film frame, moody teal and gold grade, a hard cut on every beat",
-  roadtrip: "nostalgic road-trip-with-friends home video: faded warm film, relaxed cuts, a small POV caption above the picture",
+  roadtrip: "nostalgic road-trip-with-friends home video: faded warm film, relaxed cuts",
   summer: "summer holiday montage: clean sunny colour, a hard cut on every beat",
 };
 
 interface DirectorReply {
   shots?: { n?: number; label?: string }[];
-  title?: string;
   caption?: string;
   hashtags?: string[];
 }
@@ -97,7 +94,6 @@ export async function runDirector(
     })
     .join("\n");
   const want = Math.min(shotsNeeded, cands.length);
-  const caption = STYLES[info.style].caption;
   const prompt = `You are editing an Instagram Reel from someone's own footage of their life: trips, friends, nights out, golden hours.
 
 The style is a ${STYLE_WORDS[info.style]}. Think of reels captioned "Beautiful ain't it" or "missing this...": no talking to camera, no on-screen effects, just a stream of beautiful real moments cut to the music, one shot per beat, every shot a different place or moment.
@@ -117,13 +113,12 @@ Pick ${want} shots and put them in playing order:
 - Leave out blurry, badly exposed, accidental (pocket, floor, lens cap) or posed-to-camera shots.
 
 Also write:
-- "title": ${caption ? 'a one-line "POV: ..." caption that sits above the picture, lowercase after "POV:", at most 9 words, no emoji, in the voice of "POV: you go on a summer roadtrip with your friends".' : '"" (this style has no on-screen text).'}
 - "caption": the Instagram caption: short and understated, like "Beautiful ain't it..." or "missing this...", at most one emoji.
 - "hashtags": 3-6 relevant hashtags.
 - a 2-5 word "label" describing each chosen shot.
 
 Reply with only JSON, like:
-{"shots":[{"n":3,"label":"sunset over the bay"},{"n":7,"label":"friends on the boat"}],"title":${caption ? '"POV: you go on a summer roadtrip with your friends"' : '""'},"caption":"missing this...","hashtags":["#summer","#travel"]}`;
+{"shots":[{"n":3,"label":"sunset over the bay"},{"n":7,"label":"friends on the boat"}],"caption":"missing this...","hashtags":["#summer","#travel"]}`;
 
   const reply = (await claude.json(prompt, { images: [sheet], signal })) as DirectorReply;
   const order: string[] = [];
@@ -144,7 +139,6 @@ Reply with only JSON, like:
   return {
     order,
     labels,
-    title: typeof reply.title === "string" ? reply.title.slice(0, 60) : "",
     caption: typeof reply.caption === "string" ? reply.caption.slice(0, 400) : "",
     hashtags: tags,
   };

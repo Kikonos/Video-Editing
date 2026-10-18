@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { openAsBlob } from "node:fs";
-import { extractAudio, isMp4Family, NoSoundTrack, videoInfo } from "../src/engine/mp4.ts";
+import { extractAudio, isMp4Family, NoSoundTrack, videoInfo, videoTrack } from "../src/engine/mp4.ts";
 
 // Fixtures made with ffmpeg: 3 s stereo AAC tones in a QuickTime .mov (esds
 // nested in a 'wave' box, as iPhones write) and in a faststart .mp4, a .mp4
@@ -98,4 +98,30 @@ test("tells which videos iPhones can't play", async () => {
   assert.match(hevc422!.summary, /HEVC 10-bit 4:2:2, 25 fps/);
   const hevc420 = await videoInfo(await fixture("hevc-420-10.mov"));
   assert.equal(hevc420?.playable, true);
+});
+
+test("reads H.264 picture samples in decode order with display times", async () => {
+  const v = await videoTrack(await fixture("h264-bframes.mov"));
+  assert.ok(v);
+  assert.equal(v.codec, "avc1.64000a");
+  assert.equal(v.samples.length, 60);
+  assert.equal(v.samples.filter((s) => s.key).length, 4);
+  // B-frames: decode order differs from display order (values from ffprobe).
+  assert.deepEqual(v.samples.slice(0, 4).map((s) => Math.round(s.t * 30)), [0, 3, 1, 2]);
+  const shown = v.samples.map((s) => s.t).sort((a, b) => a - b);
+  assert.equal(shown[0], 0);
+  assert.ok(Math.abs(shown[59] - 59 / 30) < 1e-6);
+  assert.equal(v.rotation, 0);
+});
+
+test("reads the rotation phones store portrait video with", async () => {
+  // ffmpeg's display_rotation 90 is anticlockwise: 270 clockwise.
+  assert.equal((await videoTrack(await fixture("h264-rotated.mov")))?.rotation, 270);
+});
+
+test("builds codec strings for HEVC and VP9", async () => {
+  assert.equal((await videoTrack(await fixture("hevc-420-10.mov")))?.codec, "hvc1.2.4.L30.90");
+  const vp9 = await videoTrack(await fixture("vp9.mp4"));
+  assert.equal(vp9?.codec, "vp09.00.10.08");
+  assert.equal(vp9?.description, null);
 });

@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { addText, deleteSeg, duplicateSeg, engine, moveSeg, selectSeg, splitAtPlayhead, updateSeg } from "../actions.ts";
+import { deleteSeg, duplicateSeg, engine, moveSeg, selectSeg, splitAtPlayhead, updateSeg } from "../actions.ts";
 import { segmentStarts, timelineBeats, timelineDownbeats, totalDuration, TRANSITION_LABEL } from "../engine/timeline.ts";
 import type { Clip, Segment } from "../engine/types.ts";
 import { store, useStore } from "../store.ts";
@@ -14,10 +14,8 @@ type Drag =
 
 export function Timeline() {
   const segments = useStore((s) => s.project.segments);
-  const texts = useStore((s) => s.project.texts);
   const clips = useStore((s) => s.clips);
   const selected = useStore((s) => s.ui.selectedSeg);
-  const selectedText = useStore((s) => s.ui.selectedText);
   const px = useStore((s) => s.ui.pxPerSec);
   const song = useStore((s) => s.songs.find((x) => x.id === s.project.songId) ?? null);
   const songStart = useStore((s) => s.project.songStart);
@@ -183,9 +181,6 @@ export function Timeline() {
         <button className="btn ghost sm" type="button" onClick={() => sel && deleteSeg(sel.id)} disabled={!sel} title="Delete shot (Delete)">
           <Icon name="trash" size={15} /> <span className="lbl">Delete</span>
         </button>
-        <button className="btn ghost sm" type="button" onClick={addText} disabled={!segments.length} title="Add text at the playhead">
-          <Icon name="text" size={15} /> <span className="lbl">Text</span>
-        </button>
         <label className="zoom" htmlFor="tl-zoom" title="Zoom the timeline">
           <Icon name="minus" size={13} />
           <input
@@ -233,24 +228,6 @@ export function Timeline() {
                 style={{ left: PAD + (drag.target < view.length ? starts[drag.target] : total) * px - 2 }}
               />
             )}
-          </div>
-          <div className="track texts">
-            {texts.map((tx) => (
-              <button
-                key={tx.id}
-                type="button"
-                className={`text-bar ${tx.id === selectedText ? "sel" : ""}`}
-                style={{ left: PAD + tx.start * px, width: Math.max(14, (tx.end - tx.start) * px) }}
-                onClick={() => {
-                  store.ui({ selectedText: tx.id, rightTab: "text", selectedSeg: null });
-                  engine.seek(tx.start + 0.01);
-                }}
-                title={tx.text}
-              >
-                <Icon name="text" size={12} />
-                <span>{tx.text}</span>
-              </button>
-            ))}
           </div>
           <div className="track music" style={{ paddingLeft: PAD }}>
             {song ? <canvas ref={waveCanvas} /> : <span className="track-empty">No music yet: cuts follow a steady 120 BPM grid.</span>}

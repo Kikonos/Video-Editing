@@ -2,7 +2,7 @@ import { useEffect, useRef, useState, useSyncExternalStore } from "react";
 import { engine, primeAudio, selectSeg, setProject, updateSeg } from "../actions.ts";
 import { cropRect } from "../engine/renderer.ts";
 import { formatTime, segmentStarts, timelineBeats, timelineDownbeats } from "../engine/timeline.ts";
-import { ASPECTS, bandRect, FRAMES, type Aspect, type FrameId } from "../engine/types.ts";
+import { ASPECTS, bandRect, FRAMES, type FrameId } from "../engine/types.ts";
 import { store, useStore } from "../store.ts";
 import { Segmented } from "./controls.tsx";
 import { Icon } from "./icons.tsx";
@@ -25,7 +25,7 @@ export function Monitor() {
   const screen = useRef<HTMLDivElement>(null);
   const aspect = useStore((s) => s.project.aspect);
   const segments = useStore((s) => s.project.segments);
-  const safe = useStore((s) => s.ui.safeZones);
+  const fullscreen = useStore((s) => s.ui.fullscreen);
   const demo = useStore((s) => s.ui.demo);
   const busy = useStore((s) => s.ui.busy);
   const scanningN = useStore((s) => s.clips.filter((c) => c.status === "loading" || c.status === "analyzing").length);
@@ -111,7 +111,6 @@ export function Monitor() {
           }}
         >
           <div className="canvas-host" ref={host} />
-          {safe && (aspect === "9:16" || aspect === "4:5") && <SafeZones aspect={aspect} />}
           {!segments.length && !busy && (
             <div className="screen-empty">
               <Icon name="spark" size={28} />
@@ -130,24 +129,82 @@ export function Monitor() {
         </div>
       </div>
       <Transport />
+      {fullscreen && <FullView />}
     </section>
   );
 }
 
-function SafeZones({ aspect }: { aspect: Aspect }) {
-  // Approximate areas Instagram's own UI covers on a Reel.
-  const tall = aspect === "9:16";
+/** The reel on its own, filling the screen. Tap to play or pause. */
+function FullView() {
+  const host = useRef<HTMLDivElement>(null);
+  const playing = useEnginePlaying();
+  const aspect = useStore((s) => s.project.aspect);
+  const { w, h } = ASPECTS[aspect];
+
+  useEffect(() => {
+    const el = host.current;
+    if (!el) return;
+    const back = engine.canvas.parentElement;
+    el.appendChild(engine.canvas);
+    // Real fullscreen where the browser allows it (not on iPhone, where this view fills the screen instead).
+    const root = document.documentElement as HTMLElement & { webkitRequestFullscreen?: () => void };
+    try {
+      if (root.requestFullscreen) void root.requestFullscreen().catch(() => {});
+      else root.webkitRequestFullscreen?.();
+    } catch {
+      // stays as a full-window view
+    }
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") store.ui({ fullscreen: false });
+    };
+    const onExit = () => {
+      if (!document.fullscreenElement) store.ui({ fullscreen: false });
+    };
+    window.addEventListener("keydown", onKey);
+    document.addEventListener("fullscreenchange", onExit);
+    return () => {
+      window.removeEventListener("keydown", onKey);
+      document.removeEventListener("fullscreenchange", onExit);
+      if (document.fullscreenElement) void document.exitFullscreen().catch(() => {});
+      back?.appendChild(engine.canvas);
+    };
+  }, []);
+
   return (
-    <div className="safe" aria-hidden="true">
-      <div className="safe-top" style={{ height: tall ? "11%" : "8%" }}>
-        <span>Top bar</span>
-      </div>
-      <div className="safe-right" style={{ top: tall ? "48%" : "40%", bottom: tall ? "21%" : "18%" }}>
-        <span>Buttons</span>
-      </div>
-      <div className="safe-bottom" style={{ height: tall ? "21%" : "18%" }}>
-        <span>Caption &amp; username</span>
-      </div>
+    <div
+      className="fullview"
+      role="dialog"
+      aria-label="Full-screen preview"
+      onClick={() => {
+        primeAudio();
+        engine.toggle();
+      }}
+    >
+      <div
+        className="fullview-screen"
+        ref={host}
+        style={{
+          aspectRatio: `${w} / ${h}`,
+          // As large as fits: limited by the height on tall screens, the width on wide ones.
+          width: `min(100%, calc((100dvh - env(safe-area-inset-top, 0px) - env(safe-area-inset-bottom, 0px)) * ${w} / ${h}))`,
+        }}
+      />
+      {!playing && (
+        <span className="fullview-play" aria-hidden="true">
+          <Icon name="play" size={34} />
+        </span>
+      )}
+      <button
+        className="fullview-close"
+        type="button"
+        aria-label="Close full screen"
+        onClick={(e) => {
+          e.stopPropagation();
+          store.ui({ fullscreen: false });
+        }}
+      >
+        <Icon name="close" size={22} />
+      </button>
     </div>
   );
 }
@@ -156,7 +213,6 @@ function Transport() {
   const t = useEngineTime();
   const playing = useEnginePlaying();
   const frame = useStore((s) => s.project.frame);
-  const safe = useStore((s) => s.ui.safeZones);
   const song = useStore((s) => s.songs.find((x) => x.id === s.project.songId) ?? null);
   const songStart = useStore((s) => s.project.songStart);
   const segments = useStore((s) => s.project.segments);
@@ -210,11 +266,16 @@ function Transport() {
         <Icon name="loop" size={17} />
       </button>
       <button
-        className={`icon-btn ${safe ? "on" : ""}`}
+        className="icon-btn"
         type="button"
-        title="Show where Instagram's buttons and caption cover the video"
-        aria-pressed={safe}
-        onClick={() => store.ui({ safeZones: !safe })}
+        title="Watch full screen"
+        aria-label="Watch full screen"
+        disabled={!segments.length}
+        onClick={() => {
+          primeAudio();
+          store.ui({ fullscreen: true });
+          if (!engine.playing) engine.play();
+        }}
       >
         <Icon name="frame" size={17} />
       </button>

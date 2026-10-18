@@ -62,3 +62,11 @@ test("a quiet clip's one moment isn't at the very start or end", () => {
   const [m] = momentsOf(clip(15), 15);
   assert.ok(m.t > 1 && m.t < 14, `moment at ${m.t}`);
 });
+
+test("a near-black night shot loses to a daylight one with the same action", () => {
+  const day = clip(20, [{ t: 10, kind: "both" }]);
+  const night = clip(20, [{ t: 10, kind: "both" }]).map((r) => ({ ...r, mean: 0.08, std: 0.06 }));
+  const d = Math.max(...momentsOf(day, 20).map((m) => m.score));
+  const n = Math.max(...momentsOf(night, 20).map((m) => m.score));
+  assert.ok(n < d * 0.5, `night ${n.toFixed(3)} vs day ${d.toFixed(3)}`);
+});

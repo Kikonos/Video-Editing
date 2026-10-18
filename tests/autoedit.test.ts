@@ -86,7 +86,6 @@ test("cinema style: blur-flash into the drop, punch-ins continue the same take",
   const clips = [fakeClip("a", 40, 5, 1), fakeClip("b", 40, 9, 2), fakeClip("c", 40, 20, 3)];
   const p = autoEdit(clips, s, emptyProject(), { style: "cinema", pace: "beat", length: 15, order: "story", hook: true, songStart: s.downbeats.find((d) => d > 22)! });
   assert.equal(p.frame, "16:9");
-  assert.equal(p.texts.length, 0, "no on-screen text in the cinema style");
   assert.equal(p.segments.filter((x) => x.transition === "smear").length, 1, "exactly one blur flash");
   assert.ok(p.segments.every((x) => x.transition === "cut" || x.transition === "smear"), "everything else is a hard cut");
   const punch = p.segments.findIndex((x) => x.zoom > 1);
@@ -97,15 +96,13 @@ test("cinema style: blur-flash into the drop, punch-ins continue the same take",
   assert.ok(Math.abs(b.srcIn - (a.srcIn + a.duration * a.speed)) < 1e-6, "punch-in picks up where the take left off");
 });
 
-test("road trip style: 4:3 frame, relaxed cuts and a POV caption above the picture", () => {
+test("road trip style: 4:3 frame, relaxed cuts, no on-screen text", () => {
   const s = song(123, 60);
   const clips = [fakeClip("a", 40, 5, 1), fakeClip("b", 40, 9, 2)];
   const p = autoEdit(clips, s, emptyProject(), { style: "roadtrip", pace: "story", length: 15, order: "story", hook: true, songStart: s.downbeats[2] });
   assert.equal(p.frame, "4:3");
-  const cap = p.texts.find((t) => t.place === "above");
-  assert.ok(cap && cap.text.startsWith("POV:"), "has a POV caption");
+  assert.ok(!("texts" in p), "no on-screen text");
   const total = p.segments.reduce((x, y) => x + y.duration, 0);
-  assert.ok(cap!.start === 0 && Math.abs(cap!.end - total) < 1e-6, "caption stays for the whole reel");
   const mean = total / p.segments.length;
   assert.ok(mean > 0.8, `mean shot ${mean.toFixed(2)}s`);
 });

@@ -99,14 +99,6 @@ export class Renderer2D implements Compositor {
     }
     c.restore();
   }
-
-  overlay(source: TexImageSource): void {
-    const c = this.ctx;
-    c.save();
-    c.globalAlpha = 1;
-    c.drawImage(source as CanvasImageSource, 0, 0, this.canvas.width, this.canvas.height);
-    c.restore();
-  }
 }
 
 function filterFor(g: Grade, blurPx: number): string {

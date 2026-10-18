@@ -4,13 +4,13 @@ import { aiErrorMessage, fallbackCaption, runDirector, writeCaption } from "./en
 import { analyzeClip, demoGrabber, snapshot, VideoOpenError, videoGrabber, type FrameGrabber } from "./engine/analyze.ts";
 import { videoInfo } from "./engine/mp4.ts";
 import { analyzeBeats, decodeAudio, encodeWav, listenToAudio, loudnessEnvelope, NoSoundTrack, waveformPeaks } from "./engine/audio.ts";
-import { alternativeMoment, autoEdit, autoLength, captionText, fitMoment, moveContent, planSlots, retime, styleGrade, type DirectorPlan } from "./engine/autoedit.ts";
+import { alternativeMoment, autoEdit, autoLength, fitMoment, moveContent, planSlots, retime, styleGrade, type DirectorPlan } from "./engine/autoedit.ts";
 import { suggestSection } from "./engine/beats.ts";
 import { DEMO_SCENES, synthDemoSong } from "./engine/demo.ts";
 import { Engine } from "./engine/engine.ts";
 import { aiCaps, getClaude, saveBlob } from "./engine/platform.ts";
 import { formatTime, segmentStarts, timelineBeats, totalDuration } from "./engine/timeline.ts";
-import type { Aspect, Clip, LookId, Moment, Project, Segment, Song, TextOverlay } from "./engine/types.ts";
+import type { Aspect, Clip, LookId, Moment, Project, Segment, Song } from "./engine/types.ts";
 import { emptyProject, uid } from "./engine/types.ts";
 import { store, toast } from "./store.ts";
 
@@ -216,7 +216,7 @@ function clearDemo() {
     project: { ...emptyProject(), aspect: st.project.aspect },
     past: [],
     future: [],
-    ui: { ...st.ui, demo: false, selectedSeg: null, selectedText: null, directorNote: null },
+    ui: { ...st.ui, demo: false, selectedSeg: null, directorNote: null },
   }));
   lastPlan = null;
 }
@@ -235,7 +235,7 @@ export function importFiles(list: FileList | File[]) {
     const id = uid("c");
     const url = URL.createObjectURL(f);
     files.set(id, f);
-    engine.registerMedia(id, url);
+    engine.registerMedia(id, url, f);
     queue.push({ id, grab: (timeout) => videoGrabber(url, timeout), file: f });
     return {
       id,
@@ -525,7 +525,7 @@ export async function generate(opts: { silentAI?: boolean; keepPlan?: boolean; h
   }
   if (opts.history === false) store.set((st) => ({ ...st, project: next }));
   else store.edit(() => next);
-  store.ui({ selectedSeg: null, selectedText: null, arranged: false, directorNote: note ?? (opts.silentAI ? store.get().ui.directorNote : null) });
+  store.ui({ selectedSeg: null, arranged: false, directorNote: note ?? (opts.silentAI ? store.get().ui.directorNote : null) });
   engine.seek(0);
 }
 
@@ -545,7 +545,7 @@ export function primeAudio() {
 // ---------------------------------------------------------------- segments
 
 export function selectSeg(id: string | null, openShotPanel = true) {
-  store.ui({ selectedSeg: id, selectedText: null, ...(id && openShotPanel ? { rightTab: "shot" as const } : {}) });
+  store.ui({ selectedSeg: id, ...(id && openShotPanel ? { rightTab: "shot" as const } : {}) });
 }
 
 /** Hand edits to the shot list: from now on automatic re-cuts keep the order. */
@@ -759,32 +759,6 @@ export function insertMoment(clipId: string, momentId: string) {
 }
 
 // -------------------------------------------------------------------- text
-
-export function addText() {
-  const p = store.get().project;
-  const total = totalDuration(p.segments) || 3;
-  // The first text is the POV caption above the picture, for the whole reel.
-  const hasAbove = p.texts.some((x) => x.place === "above");
-  const tx: TextOverlay = hasAbove
-    ? {
-        ...captionText("your words", total, uid("t")),
-        start: Math.min(engine.time, Math.max(0, total - 1)),
-        end: Math.min(total, engine.time + 2.5),
-        place: "below",
-      }
-    : captionText("POV: ", total, uid("t"));
-  store.edit((pr) => ({ ...pr, texts: [...pr.texts, tx] }));
-  store.ui({ selectedText: tx.id, rightTab: "text" });
-}
-
-export function updateText(id: string, patch: Partial<TextOverlay>, key?: string) {
-  store.edit((p) => ({ ...p, texts: p.texts.map((x) => (x.id === id ? { ...x, ...patch } : x)) }), key);
-}
-
-export function deleteText(id: string) {
-  store.edit((p) => ({ ...p, texts: p.texts.filter((x) => x.id !== id) }));
-  store.ui({ selectedText: null });
-}
 
 // ----------------------------------------------------------------- project
 

@@ -95,8 +95,6 @@ export interface StyleDef {
   punchIn: number;
   /** One motion-blur + flash bridge where the song changes section. */
   smear: boolean;
-  /** Put a small "POV: …" caption above the picture. */
-  caption: boolean;
 }
 
 export const STYLES: Record<StyleId, StyleDef> = {
@@ -110,11 +108,10 @@ export const STYLES: Record<StyleId, StyleDef> = {
     pace: "beat",
     punchIn: 7,
     smear: true,
-    caption: false,
   },
   roadtrip: {
     label: "Road trip",
-    blurb: "4:3 frame, relaxed cuts, faded summer film, POV caption",
+    blurb: "4:3 frame, relaxed cuts, faded summer film",
     look: "summer",
     lookAmount: 1,
     adjust: {},
@@ -122,7 +119,6 @@ export const STYLES: Record<StyleId, StyleDef> = {
     pace: "story",
     punchIn: 0,
     smear: false,
-    caption: true,
   },
   summer: {
     label: "Holiday",
@@ -134,6 +130,5 @@ export const STYLES: Record<StyleId, StyleDef> = {
     pace: "beat",
     punchIn: 9,
     smear: false,
-    caption: false,
   },
 };

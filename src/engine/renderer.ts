@@ -113,14 +113,6 @@ void main() {
   gl_FragColor = vec4(clamp(c, 0.0, 1.0), u_opacity);
 }`;
 
-const OVERLAY_FRAG = `
-precision mediump float;
-varying vec2 v_uv;
-uniform sampler2D u_tex;
-void main() {
-  gl_FragColor = texture2D(u_tex, v_uv);
-}`;
-
 type Uniforms = Record<string, WebGLUniformLocation | null>;
 
 /** What the engine draws through: the WebGL Renderer, or Renderer2D when WebGL is refused. */
@@ -132,7 +124,6 @@ export interface Compositor {
   setBand(x: number, y: number, w: number, h: number): void;
   clear(): void;
   draw(slot: number, layer: LayerDraw, grade: Grade, time: number): void;
-  overlay(source: TexImageSource): void;
 }
 
 export function cropRect(
@@ -164,9 +155,6 @@ export class Renderer implements Compositor {
   private prog: WebGLProgram;
   private u: Uniforms = {};
   private textures: WebGLTexture[] = [];
-  private overlayProg: WebGLProgram;
-  private overlayTex: WebGLTexture;
-  private overlayLoc: WebGLUniformLocation | null;
   /** Where layers are drawn: the picture band, x/y from the top-left. */
   private vp: [number, number, number, number] = [0, 0, 1, 1];
   lost = false;
@@ -182,9 +170,6 @@ export class Renderer implements Compositor {
       this.lost = true;
     });
     this.prog = this.build(FRAG);
-    this.overlayProg = this.build(OVERLAY_FRAG);
-    this.overlayLoc = gl.getUniformLocation(this.overlayProg, "u_tex");
-    this.overlayTex = this.makeTexture();
     gl.useProgram(this.prog);
     const names = [
       "u_tex", "u_crop", "u_kick", "u_slide", "u_blur", "u_glitch", "u_opacity", "u_flash", "u_time", "u_res",
@@ -196,7 +181,7 @@ export class Renderer implements Compositor {
     const buf = gl.createBuffer();
     gl.bindBuffer(gl.ARRAY_BUFFER, buf);
     gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1, -1, 1, -1, -1, 1, 1, 1]), gl.STATIC_DRAW);
-    // Both programs bind a_pos to location 0 (see build), so one attribute setup serves both.
+    // The program binds a_pos to location 0 (see build).
     gl.enableVertexAttribArray(0);
     gl.vertexAttribPointer(0, 2, gl.FLOAT, false, 0, 0);
     gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, false);
@@ -294,22 +279,5 @@ export class Renderer implements Compositor {
       gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
     } else gl.disable(gl.BLEND);
     gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
-  }
-
-  /** Blend a transparent 2D canvas (text) over the frame. */
-  overlay(source: TexImageSource): void {
-    if (this.lost) return;
-    const gl = this.gl;
-    gl.viewport(0, 0, this.canvas.width, this.canvas.height);
-    gl.useProgram(this.overlayProg);
-    gl.activeTexture(gl.TEXTURE0);
-    gl.bindTexture(gl.TEXTURE_2D, this.overlayTex);
-    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, source);
-    gl.uniform1i(this.overlayLoc, 0);
-    gl.enable(gl.BLEND);
-    gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
-    gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
-    const [x, y, w, h] = this.vp;
-    gl.viewport(x, this.canvas.height - y - h, w, h);
   }
 }

@@ -2,12 +2,12 @@
 // compositor; the UI hands it plain project data and reads back the clock.
 
 import { audioContext } from "./audio.ts";
+import { ClipDecoder, type DecodedFrame } from "./decoder.ts";
 import { DEMO_H, DEMO_W, drawDemo, makeDemoCanvas } from "./demo.ts";
 import { computeGrade, type Grade } from "./looks.ts";
 import { focusAt } from "./metrics.ts";
-import type { Compositor } from "./renderer.ts";
+import { cropRect, type Compositor } from "./renderer.ts";
 import { createRenderer } from "./renderer2d.ts";
-import { drawTexts } from "./text.ts";
 import {
   layersAt,
   segmentStarts,
@@ -18,7 +18,13 @@ import {
   transitionLen,
   type Layer,
 } from "./timeline.ts";
-import { ASPECTS, bandRect, type Aspect, type Clip, type LookId, type Project, type Song } from "./types.ts";
+import { ASPECTS, bandRect, type Aspect, type Clip, type LookId, type Project, type Segment, type Song } from "./types.ts";
+
+interface Shot {
+  frames: DecodedFrame[] | null;
+  failed: boolean;
+  abort: AbortController;
+}
 
 class Player {
   readonly el: HTMLVideoElement;
@@ -97,8 +103,6 @@ export class Engine {
   /** The visible output; also what gets recorded on export. */
   readonly canvas: HTMLCanvasElement;
   private renderer: Compositor;
-  private textCanvas: HTMLCanvasElement;
-  private textCtx: CanvasRenderingContext2D;
   private demoCanvases: HTMLCanvasElement[] = [makeDemoCanvas(), makeDemoCanvas()];
   private players: Player[] = [];
   private thumbs = new Map<string, HTMLImageElement>();
@@ -107,6 +111,16 @@ export class Engine {
   private clips = new Map<string, Clip>();
   private songs = new Map<string, Song>();
   private media = new Map<string, string>();
+  private files = new Map<string, Blob>();
+  /** Per clip: a WebCodecs decoder, null when the file has to play through <video>, pending while checked. */
+  private decoders = new Map<string, ClipDecoder | null | "pending">();
+  private shots = new Map<string, Shot>();
+  /** The shot under the playhead isn't decoded yet: the clock waits for it. */
+  buffering = false;
+  private onBuffer: ((waiting: boolean) => void) | null = null;
+  private lastCt = -1;
+  private lastCtPerf = 0;
+  private audioClockStalled = false;
   private buffers = new Map<string, AudioBuffer>();
   private starts: number[] = [];
   private total = 0;
@@ -138,8 +152,6 @@ export class Engine {
     canvas.className = "preview-canvas";
     this.renderer = createRenderer(canvas);
     this.canvas = this.renderer.canvas;
-    this.textCanvas = document.createElement("canvas");
-    this.textCtx = this.textCanvas.getContext("2d")!;
     for (let i = 0; i < 4; i++) this.players.push(new Player(() => this.requestRender()));
     const [w, h] = previewSize("9:16");
     this.setSize(w, h);
@@ -183,8 +195,142 @@ export class Engine {
     this.emit();
   }
 
-  registerMedia(clipId: string, url: string) {
+  registerMedia(clipId: string, url: string, file?: Blob) {
     this.media.set(clipId, url);
+    if (file) {
+      this.files.set(clipId, file);
+      this.decoders.set(clipId, "pending");
+      void ClipDecoder.open(file)
+        .catch(() => null)
+        .then((d) => {
+          this.decoders.set(clipId, d);
+          this.requestRender();
+        });
+    }
+  }
+
+  // ---------------------------------------------------------- shot cache
+
+  /** True when this clip's picture comes from the WebCodecs decoder (not a <video> element). */
+  private decoded(clipId: string): boolean {
+    const d = this.decoders.get(clipId);
+    return !!d && d !== "pending";
+  }
+
+  /** Picture width a shot is decoded at: what the band needs, never more than the source. */
+  private decodeWidth(seg: Segment, clip: Clip): number {
+    const p = this.project!;
+    const [, , bw, bh] = bandRect(p.frame ?? "full", this.canvas.width, this.canvas.height);
+    const [, , cw] = cropRect(clip.width, clip.height, bw, bh, 0.5, 0.5, Math.max(1, seg.zoom));
+    const need = Math.ceil((bw / Math.max(0.05, cw)) * 1.15);
+    // Round up to a step so small changes don't throw away decoded shots.
+    return Math.min(clip.width, Math.ceil(need / 160) * 160);
+  }
+
+  private shotKey(index: number): string | null {
+    const p = this.project!;
+    const seg = p.segments[index];
+    const clip = this.clips.get(seg.clipId);
+    if (!clip || !this.decoded(seg.clipId)) return null;
+    const pad = (transitionLen(p.segments, index) + transitionLen(p.segments, index + 1)) / 2;
+    const t0 = Math.max(0, seg.srcIn - pad * seg.speed);
+    const t1 = Math.min(clip.duration, seg.srcIn + (seg.duration + pad) * seg.speed);
+    return `${seg.clipId}|${t0.toFixed(3)}|${t1.toFixed(3)}|${this.decodeWidth(seg, clip)}`;
+  }
+
+  /** Start decoding the shots around timeline time t; drop the ones far away. */
+  private ensureShots(t: number) {
+    const p = this.project;
+    if (!p || !p.segments.length) return;
+    const segs = p.segments;
+    const layers = layersAt(segs, this.starts, t);
+    const want: number[] = layers.map((l) => l.index);
+    const ahead = this.playing || this.exporting ? 3 : 1;
+    const last = want.length ? Math.max(...want) : 0;
+    for (let k = 1; k <= ahead; k++) {
+      const j = last + k;
+      if (j < segs.length) want.push(j);
+      else if (this.loop && !this.exporting && segs.length > 1) want.push(j % segs.length);
+    }
+    const keep = new Set<string>();
+    for (const i of want) {
+      const key = this.shotKey(i);
+      if (!key) continue;
+      keep.add(key);
+      if (this.shots.has(key)) continue;
+      const seg = segs[i];
+      const dec = this.decoders.get(seg.clipId) as ClipDecoder;
+      const [, t0, t1, w] = key.split("|");
+      const shot: Shot = { frames: null, failed: false, abort: new AbortController() };
+      this.shots.set(key, shot);
+      dec
+        .frames(Number(t0), Number(t1), Number(w), shot.abort.signal)
+        .then((frames) => {
+          if (shot.abort.signal.aborted) return frames.forEach((f) => f.img.close());
+          shot.frames = frames;
+          this.requestRender();
+        })
+        .catch((e) => {
+          if ((e as DOMException)?.name === "AbortError") return;
+          console.warn("Decoding a shot failed; playing this clip through <video> instead:", e);
+          shot.failed = true;
+          this.decoders.set(seg.clipId, null);
+          this.requestRender();
+        });
+    }
+    // Keep a few recent shots for scrubbing back; close the rest.
+    if (this.shots.size > keep.size + 4) {
+      for (const [key, shot] of this.shots) {
+        if (keep.has(key)) continue;
+        shot.abort.abort();
+        shot.frames?.forEach((f) => f.img.close());
+        this.shots.delete(key);
+        if (this.shots.size <= keep.size + 4) break;
+      }
+    }
+  }
+
+  /** The decoded frame for shot `index` at clip time st, if it's ready. */
+  private decodedFrame(index: number, st: number): DecodedFrame | null {
+    const key = this.shotKey(index);
+    const frames = key ? this.shots.get(key)?.frames : null;
+    if (!frames || !frames.length) return null;
+    let lo = 0;
+    let hi = frames.length - 1;
+    while (lo < hi) {
+      const mid = (lo + hi + 1) >> 1;
+      if (frames[mid].t <= st + 1e-4) lo = mid;
+      else hi = mid - 1;
+    }
+    return frames[lo];
+  }
+
+  /** Every shot visible at t has its picture: decoded, or playing through <video>. */
+  private ready(t: number): boolean {
+    const p = this.project;
+    if (!p) return true;
+    for (const l of layersAt(p.segments, this.starts, t)) {
+      const seg = p.segments[l.index];
+      const state = this.decoders.get(seg.clipId);
+      if (state === "pending") return false;
+      if (!state) continue;
+      const key = this.shotKey(l.index);
+      const shot = key ? this.shots.get(key) : null;
+      if (!shot || (!shot.frames && !shot.failed)) return false;
+    }
+    return true;
+  }
+
+  /** Called during export when playback waits for a shot (true) and carries on (false). */
+  setBufferListener(fn: ((waiting: boolean) => void) | null) {
+    this.onBuffer = fn;
+  }
+
+  private setBuffering(on: boolean) {
+    if (this.buffering === on) return;
+    this.buffering = on;
+    this.onBuffer?.(on);
+    this.emit();
   }
 
   mediaUrl(clipId: string): string | undefined {
@@ -216,8 +362,6 @@ export class Engine {
 
   private setSize(w: number, h: number) {
     this.renderer.resize(w, h);
-    this.textCanvas.width = w;
-    this.textCanvas.height = h;
   }
 
   // ----------------------------------------------------------- transport
@@ -288,6 +432,7 @@ export class Engine {
     if (!this.playing) return;
     this.time = this.now();
     this.playing = false;
+    this.setBuffering(false);
     this.stopMusic();
     cancelAnimationFrame(this.raf);
     for (const p of this.players) p.el.pause();
@@ -316,14 +461,30 @@ export class Engine {
     this.startT = t;
     this.perfStart = performance.now();
     if (ctx) this.clockStart = ctx.currentTime + 0.04;
+    this.lastCt = -1;
+    this.lastCtPerf = this.perfStart;
+    this.audioClockStalled = false;
     this.time = t;
     this.startMusic(t);
   }
 
   private now(): number {
-    if (!this.playing) return this.time;
+    if (!this.playing || this.buffering) return this.time;
     const ctx = this.actx;
-    if (ctx && ctx.state === "running") {
+    if (ctx && ctx.state === "running" && !this.audioClockStalled) {
+      // iPhones can report a running audio clock that has stopped (another app
+      // holding the audio): then follow the system clock instead.
+      const pn = performance.now();
+      if (ctx.currentTime !== this.lastCt) {
+        this.lastCt = ctx.currentTime;
+        this.lastCtPerf = pn;
+      } else if (pn - this.lastCtPerf > 300 && pn - this.perfStart > 300) {
+        this.audioClockStalled = true;
+        console.warn("Audio clock stalled; following the system clock.");
+        this.startT += Math.max(0, ctx.currentTime - this.clockStart);
+        this.perfStart = this.lastCtPerf;
+        return this.startT + (pn - this.perfStart) / 1000;
+      }
       const latency = this.exporting ? 0 : (ctx as AudioContext & { outputLatency?: number }).outputLatency ?? 0;
       return this.startT + Math.max(0, ctx.currentTime - this.clockStart - latency);
     }
@@ -398,6 +559,24 @@ export class Engine {
         return;
       }
     }
+    this.ensureShots(t);
+    if (!this.ready(t)) {
+      // Hold the last picture and the music until the shot is decoded, like a
+      // video player buffering, rather than showing a frozen or black shot.
+      if (!this.buffering) {
+        this.time = t;
+        this.stopMusic();
+        for (const pl of this.players) if (!pl.el.paused) pl.el.pause();
+        this.setBuffering(true);
+      }
+      this.raf = requestAnimationFrame(this.loopTick);
+      return;
+    }
+    if (this.buffering) {
+      this.setBuffering(false);
+      this.restartClock(this.time);
+      t = this.time;
+    }
     this.time = t;
     this.syncPlayers(t);
     this.renderFrame(t);
@@ -411,6 +590,7 @@ export class Engine {
     requestAnimationFrame(() => {
       this.renderQueued = false;
       if (!this.playing) {
+        this.ensureShots(this.time);
         this.syncPlayers(this.time);
         this.renderFrame(this.time);
       }
@@ -434,7 +614,9 @@ export class Engine {
         else if (this.loop && !this.exporting && j - segs.length < segs.length) warm.push(j - segs.length);
       }
     }
-    const needed = warm.filter((i, k) => warm.indexOf(i) === k && this.media.has(segs[i].clipId));
+    // Decoded clips only need a <video> element for their sound.
+    const sound = p.clipVolume > 0;
+    const needed = warm.filter((i, k) => warm.indexOf(i) === k && this.media.has(segs[i].clipId) && (sound || !this.decoded(segs[i].clipId)));
     const neededIds = new Set(needed.map((i) => segs[i].id));
     for (const pl of this.players) {
       if (pl.segId && !neededIds.has(pl.segId)) {
@@ -555,6 +737,16 @@ export class Engine {
       source = c;
       w = DEMO_W;
       h = DEMO_H;
+    } else if (this.decoded(seg.clipId)) {
+      const f = this.decodedFrame(index, st);
+      if (f) {
+        source = f.img;
+        w = f.img.width;
+        h = f.img.height;
+      } else {
+        const img = this.thumbs.get(clip.id);
+        if (img && img.complete && img.naturalWidth) source = img;
+      }
     } else {
       const pl = this.players.find((x) => x.segId === seg.id);
       if (pl && pl.el.readyState >= 2 && pl.el.videoWidth) {
@@ -610,11 +802,6 @@ export class Engine {
         t,
       );
     });
-    if (p.texts.some((tx) => t >= tx.start && t <= tx.end && tx.text.trim())) {
-      this.textCtx.clearRect(0, 0, W, H);
-      drawTexts(this.textCtx, p.texts, t, W, H, band);
-      this.renderer.overlay(this.textCanvas);
-    }
   }
 
   /** Raw (ungraded) frame of the shot under the playhead, for look previews. */
@@ -662,7 +849,8 @@ export class Engine {
     const { w, h } = ASPECTS[p.aspect];
     const [pw, ph] = [this.canvas.width, this.canvas.height];
     this.setSize(w, h);
-    this.syncPlayers(this.time);
+    // Decode the frame at full size before drawing it.
+    await this.prepareAt(this.time, 4000);
     this.renderFrame(this.time);
     const blob = await new Promise<Blob | null>((res) => this.canvas.toBlob(res, "image/jpeg", 0.92));
     this.setSize(pw, ph);
@@ -678,12 +866,15 @@ export class Engine {
       this.syncPlayers(t);
       const p = this.project!;
       const layers = layersAt(p.segments, this.starts, t);
-      const ready = layers.every((l) => {
-        const seg = p.segments[l.index];
-        if (!this.media.has(seg.clipId)) return true;
-        const pl = this.players.find((x) => x.segId === seg.id);
-        return !!pl && pl.el.readyState >= 3 && !pl.el.seeking;
-      });
+      this.ensureShots(t);
+      const ready =
+        this.ready(t) &&
+        layers.every((l) => {
+          const seg = p.segments[l.index];
+          if (!this.media.has(seg.clipId) || this.decoded(seg.clipId)) return true;
+          const pl = this.players.find((x) => x.segId === seg.id);
+          return !!pl && pl.el.readyState >= 3 && !pl.el.seeking;
+        });
       if (ready || performance.now() > until) return;
       await new Promise((r) => setTimeout(r, 60));
     }
@@ -722,6 +913,8 @@ export class Engine {
       this.stopMusic();
       cancelAnimationFrame(this.raf);
       this.onEnd = null;
+      this.setBufferListener(null);
+      this.setBuffering(false);
       try {
         this.master!.disconnect();
       } catch {
@@ -756,6 +949,16 @@ export class Engine {
       const aborted = new Promise<void>((res) => opts.signal.addEventListener("abort", () => res(), { once: true }));
       const progress = setInterval(() => opts.onProgress(Math.min(1, this.time / Math.max(0.01, this.total))), 100);
       rec.start(250);
+      // While a shot is still decoding, the reel holds: pause the recording so
+      // the file never shows the wait.
+      this.setBufferListener((waiting) => {
+        try {
+          if (waiting && rec.state === "recording") rec.pause();
+          else if (!waiting && rec.state === "paused") rec.resume();
+        } catch {
+          // pause/resume unsupported: the wait shows as a held frame
+        }
+      });
       this.playing = true;
       this.restartClock(0);
       this.loopTick();

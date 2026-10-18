@@ -29,7 +29,6 @@ const MOBILE_TABS: { value: MobileTab; label: string }[] = [
   { value: "music", label: "Music" },
   { value: "shot", label: "Shot" },
   { value: "look", label: "Look" },
-  { value: "text", label: "Text" },
   { value: "audio", label: "Sound" },
 ];
 

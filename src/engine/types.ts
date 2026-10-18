@@ -133,26 +133,6 @@ export interface Segment {
   zoom: number;
 }
 
-export type TextStyle = "caption" | "serif" | "bold" | "hand";
-export type TextAnim = "none" | "fade" | "type" | "rise" | "pop";
-/** Where text sits: in the black space above or below the picture, or anywhere. */
-export type TextPlace = "above" | "below" | "free";
-
-export interface TextOverlay {
-  id: string;
-  text: string;
-  start: number;
-  end: number;
-  style: TextStyle;
-  anim: TextAnim;
-  place: TextPlace;
-  /** Vertical position of the text block's centre for "free" text, 0 = top, 1 = bottom. */
-  y: number;
-  /** Font size as a fraction of the frame width. */
-  size: number;
-  color: string;
-}
-
 export interface Adjust {
   exposure: number;
   contrast: number;
@@ -180,7 +160,6 @@ export interface Project {
   /** Where in the song the reel starts, seconds. */
   songStart: number;
   segments: Segment[];
-  texts: TextOverlay[];
   caption: string;
   hashtags: string[];
 }
@@ -213,7 +192,6 @@ export function emptyProject(): Project {
     songId: null,
     songStart: 0,
     segments: [],
-    texts: [],
     caption: "",
     hashtags: [],
   };

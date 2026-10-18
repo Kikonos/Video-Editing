@@ -2,7 +2,7 @@ import { useSyncExternalStore } from "react";
 import type { Clip, Pace, Project, Song, StyleId } from "./engine/types.ts";
 import { emptyProject } from "./engine/types.ts";
 
-export type RightTab = "auto" | "shots" | "shot" | "look" | "text" | "audio";
+export type RightTab = "auto" | "shots" | "shot" | "look" | "audio";
 export type LeftTab = "footage" | "music";
 
 export interface AutoSettings {
@@ -36,8 +36,8 @@ export interface UiState {
   /** On narrow screens all panels share one tab strip. */
   mobileTab: MobileTab;
   selectedSeg: string | null;
-  selectedText: string | null;
-  safeZones: boolean;
+  /** Full-screen preview of the reel. */
+  fullscreen: boolean;
   pxPerSec: number;
   busy: Busy | null;
   musicBusy: string | null;
@@ -75,8 +75,7 @@ const initial: State = {
     rightTab: "auto",
     mobileTab: "auto",
     selectedSeg: null,
-    selectedText: null,
-    safeZones: false,
+    fullscreen: false,
     pxPerSec: 64,
     busy: null,
     musicBusy: null,

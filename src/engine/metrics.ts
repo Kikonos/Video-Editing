@@ -236,6 +236,9 @@ export function scoreSamples(raw: RawSample[], duration: number): FrameSample[] 
     );
     const looks = clamp01(0.45 * sharp + 0.35 * exposure + 0.2 * color);
     let score = Math.pow(looks, 0.7) * (0.12 + 0.88 * interest);
+    // Very dark frames (night drives, street lights) read as almost black in a
+    // reel, however much the lights move: they only win when nothing brighter does.
+    score *= 0.3 + 0.7 * clamp01((r.mean - 0.06) / 0.14);
     // The first and last second: the camera is still settling or about to stop.
     const edge = Math.min(r.t, duration - r.t);
     if (edge < 1) score *= 0.7 + 0.3 * edge;

@@ -2,14 +2,13 @@
 // timeline. Pure function of its inputs so it is easy to test and re-run.
 
 import { STYLES } from "./looks.ts";
-import type { Clip, Moment, Pace, Project, Segment, Song, StyleId, TextOverlay, TransitionKind } from "./types.ts";
+import type { Clip, Moment, Pace, Project, Segment, Song, StyleId, TransitionKind } from "./types.ts";
 import { NEUTRAL_ADJUST, uid } from "./types.ts";
 
 export interface DirectorPlan {
   /** Moment ids in the order the shots should play. */
   order: string[];
   labels: Record<string, string>;
-  title: string;
   caption: string;
   hashtags: string[];
 }
@@ -237,13 +236,6 @@ function orderPicks(picks: Moment[], slots: Slot[], clips: Clip[], opts: AutoEdi
   return ordered;
 }
 
-const POV_LINES = [
-  "POV: the summer you'll talk about forever",
-  "POV: you said yes to every plan",
-  "POV: a week you never want to end",
-  "POV: you and your favourite people",
-];
-
 export function autoEdit(clips: Clip[], song: Song | null, base: Project, opts: AutoEditOptions): Project {
   const ready = clips.filter((c) => c.status === "ready" && c.analysis && c.analysis.moments.length);
   if (!ready.length) return base;
@@ -296,13 +288,6 @@ export function autoEdit(clips: Clip[], song: Song | null, base: Project, opts: 
     });
   });
 
-  const total = segments.reduce((a, s) => a + s.duration, 0);
-  const texts: TextOverlay[] = base.texts.filter((t) => !t.id.startsWith("auto-") && t.start < total);
-  if (def.caption) {
-    const line = opts.plan?.title?.trim() || POV_LINES[Math.floor((songStart * 7 + segments.length) % POV_LINES.length)];
-    texts.unshift(captionText(line, total));
-  }
-
   return {
     ...base,
     frame: def.frame,
@@ -311,7 +296,6 @@ export function autoEdit(clips: Clip[], song: Song | null, base: Project, opts: 
     songId: song?.id ?? null,
     songStart,
     segments,
-    texts,
     caption: opts.plan?.caption ?? base.caption,
     hashtags: opts.plan?.hashtags ?? base.hashtags,
   };
@@ -322,11 +306,6 @@ export function styleGrade(style: StyleId, filters: boolean): Pick<Project, "loo
   if (!filters) return { look: "natural", lookAmount: 1, adjust: { ...NEUTRAL_ADJUST } };
   const def = STYLES[style];
   return { look: def.look, lookAmount: def.lookAmount, adjust: { ...NEUTRAL_ADJUST, ...def.adjust } };
-}
-
-/** The small serif line that sits in the black space above the picture. */
-export function captionText(text: string, total: number, id = "auto-caption"): TextOverlay {
-  return { id, text, start: 0, end: total, style: "caption", anim: "none", place: "above", y: 0.2, size: 0.042, color: "#ffffff" };
 }
 
 type Content = Pick<Segment, "clipId" | "momentId" | "srcIn" | "speed" | "reframe" | "zoom"> & { duration: number };
@@ -383,11 +362,7 @@ export function retime(clips: Clip[], song: Song | null, base: Project, opts: Au
     const clip = ready.find((c) => c.id === m.clipId)!;
     return { id: uid("s"), clipId: clip.id, momentId: m.id, ...fitMoment(clip, m, d, 1), duration: d, transition: "cut", reframe: null, zoom: 1 };
   });
-  const total = segments.reduce((a, s) => a + s.duration, 0);
-  const texts = base.texts
-    .filter((t) => t.start < total)
-    .map((t) => (t.id.startsWith("auto-") || t.end > total ? { ...t, end: t.id.startsWith("auto-") ? total : Math.min(t.end, total) } : t));
-  return { ...base, songId: song?.id ?? null, songStart, segments, texts };
+  return { ...base, songId: song?.id ?? null, songStart, segments };
 }
 
 /** A different good moment to swap into a shot ("Try another take"). */

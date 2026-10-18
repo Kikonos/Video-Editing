@@ -100,6 +100,14 @@ interface Track {
   chunks: { off: number; n: number }[];
   width: number;
   height: number;
+  /** Keyframes (1-based sample numbers), or null when every sample is one. */
+  sync: Uint32Array | null;
+  /** Composition offsets as [count, offset] runs, or null. */
+  ctts: Int32Array | null;
+  /** Media time (timescale units) shown at presentation time 0, from the edit list. */
+  editStart: number | null;
+  /** Clockwise rotation from the track matrix (phones store portrait video this way). */
+  rotation: 0 | 90 | 180 | 270;
 }
 
 function findTrack(v: DataView, handler: "soun" | "vide"): Track | null {
@@ -117,6 +125,29 @@ function findTrack(v: DataView, handler: "soun" | "vide"): Track | null {
     const tkhd = child(v, trak, "tkhd");
     const width = tkhd ? v.getUint32(tkhd.end - 8) / 65536 : 0;
     const height = tkhd ? v.getUint32(tkhd.end - 4) / 65536 : 0;
+    // Matrix a, b (first row) sit 44 bytes before the end of tkhd.
+    let rotation: Track["rotation"] = 0;
+    if (tkhd) {
+      const a = v.getInt32(tkhd.end - 44) / 65536;
+      const b = v.getInt32(tkhd.end - 40) / 65536;
+      const deg = Math.round((Math.atan2(b, a) * 180) / Math.PI);
+      rotation = deg === 90 ? 90 : deg === 180 || deg === -180 ? 180 : deg === -90 ? 270 : 0;
+    }
+    const elst = path(v, trak, "edts", "elst");
+    let editStart: number | null = null;
+    if (elst && v.getUint32(elst.start + 4) > 0) {
+      const ev1 = v.getUint8(elst.start) === 1;
+      // Skip an empty edit (media time -1) at the start.
+      const n = v.getUint32(elst.start + 4);
+      for (let k = 0; k < n; k++) {
+        const o = elst.start + 8 + k * (ev1 ? 20 : 12);
+        const mt = ev1 ? Number(v.getBigInt64(o + 8)) : v.getInt32(o + 4);
+        if (mt >= 0) {
+          editStart = mt;
+          break;
+        }
+      }
+    }
 
     const stsd = child(v, stbl, "stsd");
     const stts = child(v, stbl, "stts");
@@ -124,6 +155,23 @@ function findTrack(v: DataView, handler: "soun" | "vide"): Track | null {
     const stsz = child(v, stbl, "stsz");
     const stco = child(v, stbl, "stco") ?? child(v, stbl, "co64");
     if (!stsd || !stts || !stsc || !stsz || !stco) continue;
+    const stss = child(v, stbl, "stss");
+    let sync: Uint32Array | null = null;
+    if (stss) {
+      sync = new Uint32Array(v.getUint32(stss.start + 4));
+      for (let k = 0; k < sync.length; k++) sync[k] = v.getUint32(stss.start + 8 + k * 4);
+    }
+    const cttsBox = child(v, stbl, "ctts");
+    let ctts: Int32Array | null = null;
+    if (cttsBox) {
+      const n = v.getUint32(cttsBox.start + 4);
+      ctts = new Int32Array(n * 2);
+      for (let k = 0; k < n; k++) {
+        ctts[k * 2] = v.getUint32(cttsBox.start + 8 + k * 8);
+        // Version 0 offsets are unsigned in the spec but written signed in practice.
+        ctts[k * 2 + 1] = v.getInt32(cttsBox.start + 12 + k * 8);
+      }
+    }
 
     // First sample description.
     const eStart = stsd.start + 8;
@@ -169,6 +217,10 @@ function findTrack(v: DataView, handler: "soun" | "vide"): Track | null {
       chunks,
       width,
       height,
+      sync,
+      ctts,
+      editStart,
+      rotation,
     };
   }
   return null;
@@ -602,4 +654,133 @@ export async function videoInfo(file: Blob): Promise<VideoInfo | null> {
   const detail = [bitDepth && bitDepth > 8 ? `${bitDepth}-bit` : "", chroma && chroma !== "4:2:0" ? chroma : ""].filter(Boolean).join(" ");
   const summary = `${res}${codec}${detail ? " " + detail : ""}${fps ? `, ${Math.round(fps)} fps` : ""}`;
   return { codec, width, height, fps, chroma, bitDepth, playable, summary };
+}
+
+// ------------------------------------------------------- video samples
+
+export interface VideoSample {
+  offset: number;
+  size: number;
+  /** Presentation time in seconds, on the same clock as <video>.currentTime. */
+  t: number;
+  /** Display duration in seconds. */
+  dur: number;
+  key: boolean;
+}
+
+export interface VideoTrack {
+  /** WebCodecs codec string, e.g. "avc1.64002a", "hvc1.1.6.L120.B0". */
+  codec: string;
+  /** Decoder configuration record (avcC / hvcC / av1C payload). */
+  description: Uint8Array | null;
+  codedWidth: number;
+  codedHeight: number;
+  /** Clockwise rotation to apply to decoded frames. */
+  rotation: 0 | 90 | 180 | 270;
+  /** In decode order. */
+  samples: VideoSample[];
+}
+
+const hex2 = (n: number) => n.toString(16).padStart(2, "0");
+
+function hevcCodec(type: string, p: Uint8Array): string {
+  const space = ["", "A", "B", "C"][p[1] >> 6];
+  const tier = (p[1] >> 5) & 1 ? "H" : "L";
+  const profile = p[1] & 0x1f;
+  let compat = ((p[2] << 24) | (p[3] << 16) | (p[4] << 8) | p[5]) >>> 0;
+  // The compatibility flags are written bit-reversed.
+  let rev = 0;
+  for (let i = 0; i < 32; i++) {
+    rev = (rev << 1) | (compat & 1);
+    compat >>>= 1;
+  }
+  const cons = Array.from(p.slice(6, 12));
+  while (cons.length && cons[cons.length - 1] === 0) cons.pop();
+  return [`${type}`, `${space}${profile}`, (rev >>> 0).toString(16).toUpperCase(), `${tier}${p[12]}`, ...cons.map((c) => c.toString(16).toUpperCase())].join(".");
+}
+
+/**
+ * The picture track of an MP4/MOV, ready for a WebCodecs VideoDecoder.
+ * Null when the file has no video or uses a codec WebCodecs can't be told about.
+ */
+export async function videoTrack(file: Blob): Promise<VideoTrack | null> {
+  if (!(await isMp4Family(file))) return null;
+  const moov = await readMoov(file);
+  const t = findTrack(moov, "vide");
+  if (!t || !t.count) return null;
+  const e = t.entry;
+  const type = t.entryType;
+  let codec: string | null = null;
+  let description: Uint8Array | null = null;
+  const payload = (b: Uint8Array | null) => (b ? b.slice(8) : null);
+  if (type === "avc1" || type === "avc3") {
+    description = payload(findIn(e, "avcC", 86));
+    if (description) codec = `${type}.${hex2(description[1])}${hex2(description[2])}${hex2(description[3])}`;
+  } else if (type === "hvc1" || type === "hev1" || type === "dvh1") {
+    description = payload(findIn(e, "hvcC", 86));
+    if (description) codec = hevcCodec(type === "dvh1" ? "hvc1" : type, description);
+  } else if (type === "vp09") {
+    const vpcC = payload(findIn(e, "vpcC", 86));
+    if (vpcC) codec = `vp09.${hex2(vpcC[4])}.${String(vpcC[5]).padStart(2, "0")}.${String(vpcC[6] >> 4).padStart(2, "0")}`;
+  } else if (type === "av01") {
+    description = payload(findIn(e, "av1C", 86));
+    if (description) {
+      const profile = description[1] >> 5;
+      const level = description[1] & 0x1f;
+      const tier = description[2] >> 7 ? "H" : "M";
+      const depth = (description[2] >> 6) & 1 ? ((description[2] >> 5) & 1 ? 12 : 10) : 8;
+      codec = `av01.${profile}.${String(level).padStart(2, "0")}${tier}.${String(depth).padStart(2, "0")}`;
+    }
+  }
+  if (!codec) return null;
+
+  const { offsets, sizes } = sampleLayout(t);
+  const n = offsets.length;
+  // Decode times from stts.
+  const sttsDv = new DataView(t.stts.buffer, t.stts.byteOffset, t.stts.length);
+  const runs = sttsDv.getUint32(4);
+  const dts = new Float64Array(n);
+  const durs = new Float64Array(n);
+  let i = 0;
+  let clock = 0;
+  for (let r = 0; r < runs && i < n; r++) {
+    const count = sttsDv.getUint32(8 + r * 8);
+    const delta = sttsDv.getUint32(12 + r * 8);
+    for (let k = 0; k < count && i < n; k++, i++) {
+      dts[i] = clock;
+      durs[i] = delta;
+      clock += delta;
+    }
+  }
+  const pts = Float64Array.from(dts);
+  if (t.ctts) {
+    let s = 0;
+    for (let r = 0; r < t.ctts.length / 2 && s < n; r++) {
+      for (let k = 0; k < t.ctts[r * 2] && s < n; k++, s++) pts[s] += t.ctts[r * 2 + 1];
+    }
+  }
+  let minPts = Infinity;
+  for (let k = 0; k < n; k++) minPts = Math.min(minPts, pts[k]);
+  const zero = t.editStart ?? minPts;
+  const keys = new Set(t.sync ?? []);
+  const samples: VideoSample[] = [];
+  for (let k = 0; k < n; k++) {
+    samples.push({
+      offset: offsets[k],
+      size: sizes[k],
+      t: (pts[k] - zero) / t.timescale,
+      dur: durs[k] / t.timescale,
+      key: t.sync ? keys.has(k + 1) : true,
+    });
+  }
+  return { codec, description, codedWidth: e.getUint16(32), codedHeight: e.getUint16(34), rotation: t.rotation, samples };
+}
+
+/** Bytes of these samples, read with as few file reads as possible. */
+export function readSampleData(file: Blob, samples: VideoSample[]): Promise<Uint8Array[]> {
+  return readRanges(
+    file,
+    samples.map((s) => s.offset),
+    samples.map((s) => s.size),
+  );
 }

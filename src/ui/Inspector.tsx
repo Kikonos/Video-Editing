@@ -1,9 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import {
-  addText,
   chooseLook,
   deleteSeg,
-  deleteText,
   duplicateSeg,
   engine,
   generate,
@@ -17,13 +15,11 @@ import {
   stopDirector,
   swapTake,
   updateSeg,
-  updateText,
 } from "../actions.ts";
 import { autoLength } from "../engine/autoedit.ts";
 import { LOOKS, STYLES } from "../engine/looks.ts";
-import { TEXT_STYLES } from "../engine/text.ts";
-import { formatTime, segmentStarts, TRANSITION_LABEL } from "../engine/timeline.ts";
-import { FRAMES, NEUTRAL_ADJUST, type Adjust, type FrameId, type LookId, type Pace, type StyleId, type TextAnim, type TextPlace, type TextStyle, type TransitionKind } from "../engine/types.ts";
+import { formatTime, TRANSITION_LABEL } from "../engine/timeline.ts";
+import { FRAMES, NEUTRAL_ADJUST, type Adjust, type FrameId, type LookId, type Pace, type StyleId, type TransitionKind } from "../engine/types.ts";
 import { store, useStore, type RightTab } from "../store.ts";
 import { Field, Segmented, Slider, Toggle } from "./controls.tsx";
 import { SongListen } from "./Library.tsx";
@@ -35,7 +31,6 @@ const TABS: { value: RightTab; label: string }[] = [
   { value: "shots", label: "Shots" },
   { value: "shot", label: "Shot" },
   { value: "look", label: "Look" },
-  { value: "text", label: "Text" },
   { value: "audio", label: "Sound" },
 ];
 
@@ -54,7 +49,6 @@ export function Inspector({ only }: { only?: RightTab }) {
         {shown === "shots" && <ShotsPanel />}
         {shown === "shot" && <ShotPanel />}
         {shown === "look" && <LookPanel />}
-        {shown === "text" && <TextPanel />}
         {shown === "audio" && <AudioPanel />}
       </div>
     </section>
@@ -209,7 +203,7 @@ function QuickStart() {
   const mySong = song && song.source !== "demo" ? song : null;
   const total = segments.reduce((a, x) => a + x.duration, 0);
   const videoStatus = !mine.length
-    ? "Select them all at once: as many as you like."
+    ? "Select them all at once: as many as you like. Videos kept in iCloud download to your phone first, which takes a while for long clips."
     : scanningN
       ? `Finding the best moments: ${readyN} of ${readyN + scanningN} done`
       : `${readyN} clip${readyN === 1 ? "" : "s"} scanned${failed ? `, ${failed} couldn't be read` : ""}`;
@@ -560,126 +554,6 @@ function LookPanel() {
           />
         ))}
       </Field>
-    </div>
-  );
-}
-
-// --------------------------------------------------------------------- text
-
-const SWATCHES = ["#ffffff", "#111111", "#ffc27a", "#ff7a6e", "#7ce0d6", "#ffe14d"];
-const ANIMS: { value: TextAnim; label: string }[] = [
-  { value: "none", label: "None" },
-  { value: "fade", label: "Fade" },
-  { value: "type", label: "Type" },
-  { value: "rise", label: "Rise" },
-];
-
-const PLACES: { value: TextPlace; label: string }[] = [
-  { value: "above", label: "Above picture" },
-  { value: "below", label: "Below picture" },
-  { value: "free", label: "On picture" },
-];
-
-function TextPanel() {
-  const texts = useStore((s) => s.project.texts);
-  const selected = useStore((s) => s.ui.selectedText);
-  const segments = useStore((s) => s.project.segments);
-  const tx = texts.find((t) => t.id === selected);
-  const total = segments.reduce((a, s) => a + s.duration, 0);
-  return (
-    <div className="stack">
-      <div className="row between">
-        <h2 className="panel-title">Text</h2>
-        <button className="btn sm" type="button" onClick={addText} disabled={!segments.length}>
-          <Icon name="plus" size={15} /> Add text
-        </button>
-      </div>
-      {!texts.length && <p className="lede">Add a small "POV: …" line above the picture, like the road-trip reels. It's drawn into the video when you export.</p>}
-      {texts.length > 0 && (
-        <ul className="text-list">
-          {texts.map((t) => (
-            <li key={t.id}>
-              <button
-                type="button"
-                className={t.id === selected ? "on" : ""}
-                onClick={() => {
-                  store.ui({ selectedText: t.id });
-                  engine.seek(t.start + 0.01);
-                }}
-              >
-                <span className="clip-name">{t.text || "Empty"}</span>
-                <span className="num dim">
-                  {t.start.toFixed(1)}–{t.end.toFixed(1)}s
-                </span>
-              </button>
-            </li>
-          ))}
-        </ul>
-      )}
-      {tx && (
-        <div className="stack text-edit">
-          <label className="field" htmlFor="text-content">
-            <span className="eyebrow">Words</span>
-            <textarea id="text-content" rows={2} value={tx.text} onChange={(e) => updateText(tx.id, { text: e.target.value }, "text-" + tx.id)} />
-          </label>
-          <Field label="Style">
-            <div className="chips">
-              {(Object.keys(TEXT_STYLES) as TextStyle[]).map((s) => (
-                <button
-                  key={s}
-                  type="button"
-                  className={`chip font-${s} ${tx.style === s ? "on" : ""}`}
-                  aria-pressed={tx.style === s}
-                  onClick={() => updateText(tx.id, { style: s })}
-                >
-                  {TEXT_STYLES[s].label}
-                </button>
-              ))}
-            </div>
-          </Field>
-          <Field label="Where">
-            <Segmented<TextPlace> label="Where" value={tx.place ?? "free"} onChange={(v) => updateText(tx.id, { place: v })} options={PLACES} />
-          </Field>
-          <Field label="Animation">
-            <Segmented<TextAnim> label="Animation" value={tx.anim} onChange={(v) => updateText(tx.id, { anim: v })} options={ANIMS} />
-          </Field>
-          <Field label="Colour">
-            <div className="swatches">
-              {SWATCHES.map((c) => (
-                <button
-                  key={c}
-                  type="button"
-                  className={`swatch ${tx.color === c ? "on" : ""}`}
-                  style={{ background: c }}
-                  aria-label={`Colour ${c}`}
-                  aria-pressed={tx.color === c}
-                  onClick={() => updateText(tx.id, { color: c })}
-                />
-              ))}
-            </div>
-          </Field>
-          {(tx.place ?? "free") === "free" && <Slider id="text-y" label="Position" value={tx.y} min={0.08} max={0.92} onChange={(v) => updateText(tx.id, { y: v }, "y-" + tx.id)} format={(v) => (v < 0.33 ? "Top" : v > 0.66 ? "Bottom" : "Middle")} />}
-          <Slider id="text-size" label="Size" value={tx.size} min={0.025} max={0.14} onChange={(v) => updateText(tx.id, { size: v }, "size-" + tx.id)} format={(v) => `${Math.round(v * 100)}`} />
-          <Slider id="text-start" label="Appears" value={tx.start} min={0} max={Math.max(0.1, total - 0.2)} step={0.01} onChange={(v) => updateText(tx.id, { start: v, end: Math.max(v + 0.3, tx.end) }, "start-" + tx.id)} format={(v) => `${v.toFixed(2)}s`} />
-          <Slider id="text-end" label="Disappears" value={tx.end} min={0.2} max={Math.max(0.3, total)} step={0.01} onChange={(v) => updateText(tx.id, { end: Math.max(tx.start + 0.3, v) }, "end-" + tx.id)} format={(v) => `${v.toFixed(2)}s`} />
-          <div className="row gap">
-            <button
-              className="btn"
-              type="button"
-              onClick={() => {
-                const st = segmentStarts(segments);
-                const i = st.findIndex((s, k) => engine.time >= s && engine.time < s + segments[k].duration);
-                if (i >= 0) updateText(tx.id, { start: st[i], end: st[i] + segments[i].duration });
-              }}
-            >
-              Fit to current shot
-            </button>
-            <button className="btn danger" type="button" onClick={() => deleteText(tx.id)}>
-              <Icon name="trash" size={15} /> Delete
-            </button>
-          </div>
-        </div>
-      )}
     </div>
   );
 }
